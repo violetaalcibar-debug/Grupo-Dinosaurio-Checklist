@@ -144,7 +144,7 @@
         const stages = window.DineoData.INLINE_STAGES;
         grid.innerHTML = "";
         stages.forEach((s) => {
-          const src = `${base}/?stage=${s.id}&instance={{ user.id }}`;
+          const src = `${base}/?stage=${s.id}`;
           const snippet =
             `<iframe\n` +
             `  src="${src}"\n` +

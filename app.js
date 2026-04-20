@@ -3,45 +3,52 @@
  * -------
  * Lógica principal de la app Dino Talento (Programa Formaciones · Grupo Dinosaurio).
  *
- * Estructura de persistencia en localStorage (namespace por instancia):
- *   dino:v2:<instanceId>:meta    → {
- *     [stageId]: { entrenador, legajo_entrenador, colaborador, legajo_colaborador,
- *                  fecha_inicio, fecha_fin, puesto, resultado, observaciones }
- *   }
- *   dino:v2:<instanceId>:tasks   → {
- *     [stageId]: { [taskId]: { fecha, estado, comentario } }
- *   }
- *   dino:v2:<instanceId>:ui      → { currentStage }
+ * Persistencia: sessionStorage (se borra al cerrar la pestaña).
+ * Cada pestaña = su propio expediente. Dos pestañas simultáneas del mismo puesto
+ * = dos colaboradores distintos, estados independientes.
+ * Al cerrar la pestaña se borra todo → la próxima apertura arranca limpia.
+ * El refresh del tab mantiene el estado (sessionStorage sobrevive al F5).
  *
- * Resolución del instanceId:
- *   1. URL `?instance=ABC`  → recomendado, pasar userId de Human.
- *   2. Si no viene, se genera un UUID corto y se fija con history.replaceState
- *      (así cada duplicación del iframe sin parámetro arranca con estado limpio).
+ * Estructura:
+ *   dino:v3:<tabId>:meta    → { [stageId]: { entrenador, legajo_entrenador, ... } }
+ *   dino:v3:<tabId>:tasks   → { [stageId]: { [taskId]: { fecha, estado, comentario } } }
+ *   dino:v3:<tabId>:ui      → { currentStage }
+ *
+ * Resolución del tabId:
+ *   Se genera un UUID al primer load y se guarda en sessionStorage bajo
+ *   "dino:v3:tab-id". Cada pestaña tiene su propio UUID, aislado del resto.
  */
 
 (() => {
   "use strict";
 
-  const STORAGE_PREFIX = "dino:v2";
+  const STORAGE_PREFIX = "dino:v3";
+  const TAB_ID_KEY = `${STORAGE_PREFIX}:tab-id`;
   const ESTADOS = ["", "Pendiente", "En proceso", "Finalizado"];
 
   // ---------- URL params ----------
-  // ?instance=<id>  → namespace de localStorage (recomendado: userId de Human).
-  // ?stage=<id>     → fija un único checklist (modo "un iframe por puesto").
+  // ?stage=<id> → fija un único checklist (modo "un iframe por puesto").
   const urlParams = new URLSearchParams(window.location.search);
 
-  // ---------- Instance ----------
-  function getOrCreateInstanceId() {
-    const url = new URL(window.location.href);
-    let id = url.searchParams.get("instance");
-    if (!id) {
-      id = crypto.randomUUID().slice(0, 8);
-      url.searchParams.set("instance", id);
-      window.history.replaceState({}, "", url.toString());
+  // ---------- Instance (por pestaña) ----------
+  // UUID generado una vez por pestaña. Vive en sessionStorage.
+  // Nuevo tab → nuevo UUID → storage vacío.
+  // Refresh del mismo tab → se mantiene el UUID → se mantiene el estado.
+  // Cierre del tab → sessionStorage se borra → se pierde todo.
+  function getOrCreateTabId() {
+    try {
+      let id = sessionStorage.getItem(TAB_ID_KEY);
+      if (!id) {
+        id = crypto.randomUUID().slice(0, 8);
+        sessionStorage.setItem(TAB_ID_KEY, id);
+      }
+      return id;
+    } catch {
+      // sessionStorage bloqueado (incógnito estricto, etc.): UUID volátil en memoria.
+      return crypto.randomUUID().slice(0, 8);
     }
-    return id;
   }
-  const instanceId = getOrCreateInstanceId();
+  const instanceId = getOrCreateTabId();
   const lockedStageId = urlParams.get("stage") || null; // si viene, la app queda fijada a ese puesto
   const KEYS = {
     meta: `${STORAGE_PREFIX}:${instanceId}:meta`,
@@ -52,7 +59,7 @@
   // ---------- Storage ----------
   function readJSON(key, fallback) {
     try {
-      const raw = localStorage.getItem(key);
+      const raw = sessionStorage.getItem(key);
       return raw ? JSON.parse(raw) : fallback;
     } catch {
       return fallback;
@@ -60,11 +67,23 @@
   }
   function writeJSON(key, value) {
     try {
-      localStorage.setItem(key, JSON.stringify(value));
+      sessionStorage.setItem(key, JSON.stringify(value));
     } catch (err) {
       console.warn("[Dino Talento] No se pudo persistir:", err);
     }
   }
+
+  // ---------- Warning al cerrar con datos sin exportar ----------
+  let hasUnsavedData = false;
+  function markDirty() { hasUnsavedData = true; }
+  function markExported() { hasUnsavedData = false; }
+  window.addEventListener("beforeunload", (e) => {
+    if (hasUnsavedData) {
+      e.preventDefault();
+      e.returnValue = "Tenés datos sin exportar. ¿Seguro que querés cerrar?";
+      return e.returnValue;
+    }
+  });
 
   // ---------- State ----------
   const state = {
@@ -246,6 +265,7 @@
     state.tasks[stageId][taskId] = state.tasks[stageId][taskId] || {};
     state.tasks[stageId][taskId][field] = value;
     writeJSON(KEYS.tasks, state.tasks);
+    markDirty();
 
     if (field === "estado") {
       rowEl.dataset.status = value;
@@ -282,7 +302,10 @@
       state.stages.find((s) => s.id === state.currentStageId)?.name || "";
     debouncedSaveMeta();
   });
-  const debouncedSaveMeta = debounce(() => writeJSON(KEYS.meta, state.meta), 250);
+  const debouncedSaveMeta = debounce(() => {
+    writeJSON(KEYS.meta, state.meta);
+    markDirty();
+  }, 250);
 
   // ---------- Reset ----------
   els.resetBtn.addEventListener("click", () => {
@@ -327,6 +350,7 @@
     const rows = state.stages.flatMap(buildStageRows);
     const csv = Papa.unparse(rows);
     triggerDownload(new Blob([csv], { type: "text/csv;charset=utf-8;" }), filename("csv"));
+    markExported();
     showToast("CSV descargado");
   }
 
@@ -362,6 +386,7 @@
       XLSX.utils.book_append_sheet(wb, ws, safeName);
     });
     XLSX.writeFile(wb, filename("xlsx"));
+    markExported();
     showToast("Excel descargado");
   }
 
@@ -446,6 +471,7 @@
     });
 
     doc.save(filename("pdf"));
+    markExported();
     showToast("PDF descargado");
   }
 
