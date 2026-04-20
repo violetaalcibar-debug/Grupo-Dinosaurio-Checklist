@@ -1,0 +1,201 @@
+<!doctype html>
+<html lang="es">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Dino Talento · Códigos iframe por checklist</title>
+    <link
+      href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap"
+      rel="stylesheet"
+    />
+    <style>
+      :root {
+        --primary: #2e7d32;
+        --bg: #f6f7fb;
+        --surface: #fff;
+        --border: #e4e7ef;
+        --text: #101223;
+        --muted: #5b6079;
+      }
+      * { box-sizing: border-box; }
+      body {
+        margin: 0;
+        font-family: "Inter", system-ui, sans-serif;
+        background: var(--bg);
+        color: var(--text);
+        padding: 32px 24px 80px;
+      }
+      .wrap { max-width: 1100px; margin: 0 auto; }
+      h1 { margin: 0 0 4px; font-size: 22px; }
+      .sub { color: var(--muted); margin: 0 0 24px; font-size: 14px; }
+      .base {
+        background: var(--surface);
+        border: 1px solid var(--border);
+        border-radius: 12px;
+        padding: 14px 16px;
+        margin-bottom: 24px;
+        font-size: 13px;
+        display: flex;
+        gap: 12px;
+        align-items: center;
+        flex-wrap: wrap;
+      }
+      .base label { color: var(--muted); font-weight: 600; }
+      .base input {
+        flex: 1;
+        min-width: 320px;
+        font: inherit;
+        padding: 8px 10px;
+        border-radius: 6px;
+        border: 1px solid var(--border);
+      }
+      .grid {
+        display: grid;
+        grid-template-columns: 1fr;
+        gap: 20px;
+      }
+      .card {
+        background: var(--surface);
+        border: 1px solid var(--border);
+        border-radius: 12px;
+        overflow: hidden;
+      }
+      .card-head {
+        padding: 14px 18px;
+        display: flex;
+        justify-content: space-between;
+        align-items: center;
+        gap: 12px;
+        background: var(--primary);
+        color: #fff;
+      }
+      .card-head strong { font-size: 14px; }
+      .card-head code { font-size: 12px; opacity: .85; }
+      .snippet {
+        padding: 14px 18px;
+        font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+        font-size: 12px;
+        white-space: pre-wrap;
+        word-break: break-all;
+        background: #fafbff;
+        color: #101223;
+        border-top: 1px solid var(--border);
+      }
+      .copy {
+        margin: 0 18px 14px;
+        padding: 8px 14px;
+        border-radius: 6px;
+        border: 1px solid var(--primary);
+        background: var(--primary);
+        color: #fff;
+        cursor: pointer;
+        font-size: 12px;
+        font-weight: 600;
+      }
+      .copy:hover { filter: brightness(0.95); }
+      .copy.copied { background: #1b5e20; }
+      .preview { border-top: 1px solid var(--border); background: #000; }
+      .preview iframe { width: 100%; height: 500px; border: 0; display: block; }
+      .open-link {
+        display: inline-block;
+        padding: 6px 10px;
+        font-size: 11px;
+        border-radius: 4px;
+        background: rgba(255, 255, 255, 0.2);
+        color: #fff;
+        text-decoration: none;
+      }
+      .open-link:hover { background: rgba(255, 255, 255, 0.3); }
+      details summary {
+        cursor: pointer;
+        padding: 10px 18px;
+        font-size: 12px;
+        color: var(--muted);
+      }
+    </style>
+  </head>
+  <body>
+    <div class="wrap">
+      <h1>Dino Talento · Códigos iframe por checklist</h1>
+      <p class="sub">
+        Cada puesto tiene su propia URL. Copiá el snippet correspondiente y pegalo en la pantalla
+        correspondiente de Human.
+      </p>
+
+      <div class="base">
+        <label>URL base del deploy:</label>
+        <input id="base" type="text" value="https://tu-sitio.netlify.app" />
+        <span class="sub" style="margin:0">↳ los snippets se actualizan solos al cambiarla.</span>
+      </div>
+
+      <div class="grid" id="grid"></div>
+    </div>
+
+    <script src="data.js"></script>
+    <script>
+      const grid = document.getElementById("grid");
+      const baseInput = document.getElementById("base");
+      const saved = localStorage.getItem("dino:embeds:base");
+      if (saved) baseInput.value = saved;
+
+      function render() {
+        const base = baseInput.value.replace(/\/$/, "");
+        localStorage.setItem("dino:embeds:base", base);
+        const stages = window.DineoData.INLINE_STAGES;
+        grid.innerHTML = "";
+        stages.forEach((s) => {
+          const src = `${base}/?stage=${s.id}&instance={{ user.id }}`;
+          const snippet =
+            `<iframe\n` +
+            `  src="${src}"\n` +
+            `  width="100%"\n` +
+            `  height="1200"\n` +
+            `  style="border:0; border-radius:12px; background:#f6f7fb;"\n` +
+            `  allow="clipboard-write"\n` +
+            `  title="Checklist Dino Talento · ${s.name}"\n` +
+            `  loading="lazy"\n` +
+            `></iframe>`;
+          const previewSrc = `${base}/?stage=${s.id}`;
+          const card = document.createElement("div");
+          card.className = "card";
+          card.innerHTML = `
+            <div class="card-head">
+              <div>
+                <strong>${s.name}</strong>
+                <div><code>?stage=${s.id}</code></div>
+              </div>
+              <a class="open-link" href="${previewSrc}" target="_blank" rel="noopener">Abrir</a>
+            </div>
+            <div class="snippet">${snippet.replace(/</g, "&lt;")}</div>
+            <button class="copy" data-snippet="${encodeURIComponent(snippet)}">Copiar snippet</button>
+            <details>
+              <summary>Ver preview del iframe ↓</summary>
+              <div class="preview"><iframe src="${previewSrc}" loading="lazy"></iframe></div>
+            </details>
+          `;
+          grid.appendChild(card);
+        });
+
+        grid.querySelectorAll(".copy").forEach((btn) => {
+          btn.addEventListener("click", async () => {
+            const snip = decodeURIComponent(btn.dataset.snippet);
+            try {
+              await navigator.clipboard.writeText(snip);
+              btn.textContent = "Copiado ✓";
+              btn.classList.add("copied");
+              setTimeout(() => {
+                btn.textContent = "Copiar snippet";
+                btn.classList.remove("copied");
+              }, 1500);
+            } catch {
+              alert("No se pudo copiar. Seleccionalo manualmente.");
+            }
+          });
+        });
+      }
+
+      baseInput.addEventListener("input", render);
+      render();
+    </script>
+  </body>
+</html>

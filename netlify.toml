@@ -1,0 +1,15 @@
+# Netlify config para Dineo Talento.
+# El proyecto es estático: no requiere build.
+
+[build]
+  publish = "."
+
+# Permitir que Human (u otros dominios) embeben la app vía iframe.
+# Si querés restringir, reemplazá "*" por "https://app.human.co" o el dominio específico.
+[[headers]]
+  for = "/*"
+  [headers.values]
+    X-Frame-Options = "ALLOWALL"
+    Content-Security-Policy = "frame-ancestors *;"
+    Cache-Control = "public, max-age=0, must-revalidate"
+    Referrer-Policy = "strict-origin-when-cross-origin"

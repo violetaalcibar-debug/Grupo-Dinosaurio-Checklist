@@ -1,0 +1,169 @@
+<!doctype html>
+<html lang="es">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Dino Talento · Programa Formaciones</title>
+    <link rel="preconnect" href="https://fonts.googleapis.com" />
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+    <link
+      href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap"
+      rel="stylesheet"
+    />
+    <link rel="stylesheet" href="styles.css" />
+    <!-- Parsers / exporters vía CDN -->
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/PapaParse/5.4.1/papaparse.min.js"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/jspdf/2.5.1/jspdf.umd.min.js"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/jspdf-autotable/3.8.2/jspdf.plugin.autotable.min.js"></script>
+  </head>
+  <body>
+    <div class="app" id="app">
+      <!-- Sidebar -->
+      <aside class="sidebar" aria-label="Puestos">
+        <div class="brand">
+          <div class="brand-mark" aria-hidden="true">DT</div>
+          <div class="brand-text">
+            <strong>Dino Talento</strong>
+            <span>Programa Formaciones</span>
+          </div>
+        </div>
+
+        <nav id="stage-nav" class="stage-nav" aria-label="Navegación entre puestos"></nav>
+
+        <div class="sidebar-footer">
+          <div class="instance-pill" title="Identificador único de esta instancia">
+            <span class="dot"></span>
+            <span id="instance-id">—</span>
+          </div>
+          <button id="reset-btn" class="btn btn-ghost btn-sm" type="button">
+            Reiniciar instancia
+          </button>
+        </div>
+      </aside>
+
+      <!-- Main -->
+      <main class="main">
+        <header class="topbar">
+          <div class="topbar-left">
+            <div class="topbar-kicker">Programa Formaciones — "Tu Desarrollo en Grupo Dinosaurio"</div>
+            <h1 id="stage-title">Cargando…</h1>
+          </div>
+          <div class="topbar-right">
+            <button id="export-xlsx" class="btn btn-secondary" type="button">Excel</button>
+            <button id="export-pdf" class="btn btn-secondary" type="button">PDF</button>
+            <button id="export-csv" class="btn btn-ghost" type="button">CSV</button>
+          </div>
+        </header>
+
+        <!-- Cabecera del checklist (campos del entrenamiento) -->
+        <section class="form-card" id="stage-form" aria-label="Datos del entrenamiento">
+          <div class="form-grid">
+            <label class="field">
+              <span>Apellido y Nombre del entrenador</span>
+              <input type="text" data-meta="entrenador" autocomplete="off" />
+            </label>
+            <label class="field">
+              <span>Nº de Legajo</span>
+              <input type="text" data-meta="legajo_entrenador" inputmode="numeric" autocomplete="off" />
+            </label>
+            <label class="field">
+              <span>Apellido y Nombre del colaborador entrenado</span>
+              <input type="text" data-meta="colaborador" autocomplete="off" />
+            </label>
+            <label class="field">
+              <span>Nº de Legajo</span>
+              <input type="text" data-meta="legajo_colaborador" inputmode="numeric" autocomplete="off" />
+            </label>
+            <label class="field">
+              <span>Fecha de inicio del entrenamiento</span>
+              <input type="date" data-meta="fecha_inicio" />
+            </label>
+            <label class="field">
+              <span>Fecha de fin del entrenamiento</span>
+              <input type="date" data-meta="fecha_fin" />
+            </label>
+            <label class="field">
+              <span>Puesto en el que se entrenó</span>
+              <input type="text" data-meta="puesto" readonly />
+            </label>
+            <label class="field">
+              <span>Resultado</span>
+              <select data-meta="resultado">
+                <option value="">—</option>
+                <option value="APTO">APTO</option>
+                <option value="NO APTO">NO APTO</option>
+              </select>
+            </label>
+          </div>
+          <label class="field field-full">
+            <span>Observaciones</span>
+            <textarea data-meta="observaciones" rows="3" placeholder="Observaciones generales sobre el entrenamiento…"></textarea>
+          </label>
+        </section>
+
+        <!-- Progreso de esta etapa -->
+        <section class="stage-progress-card" aria-label="Progreso del checklist">
+          <div class="stage-progress-row">
+            <div class="progress">
+              <div id="stage-progress-bar" class="progress-bar" style="width: 0%"></div>
+            </div>
+            <div class="progress-meta">
+              <strong id="stage-progress-text">0%</strong>
+              <span id="stage-progress-detail" class="muted">0 / 0 tareas finalizadas</span>
+            </div>
+          </div>
+        </section>
+
+        <!-- Tabla de tareas -->
+        <section class="task-table-card" aria-label="Guía de tareas">
+          <div class="task-table" id="task-table">
+            <!-- Filas renderizadas dinámicamente -->
+          </div>
+        </section>
+
+        <!-- Firmas -->
+        <section class="signatures" aria-label="Firma y aclaración">
+          <div class="sig-block">
+            <div class="sig-line"></div>
+            <strong>Firma y Aclaración</strong>
+            <span class="muted">Colaborador</span>
+          </div>
+          <div class="sig-block">
+            <div class="sig-line"></div>
+            <strong>Firma y Aclaración</strong>
+            <span class="muted">Entrenador</span>
+          </div>
+        </section>
+
+        <footer class="main-footer">
+          <small class="muted">
+            Dino Talento · Todos los datos se guardan localmente en este navegador. Cada iframe
+            genera una instancia independiente.
+          </small>
+        </footer>
+      </main>
+    </div>
+
+    <!-- Toast -->
+    <div id="toast" class="toast" role="status" aria-live="polite"></div>
+
+    <!-- Confirm modal -->
+    <div id="modal" class="modal" role="dialog" aria-modal="true" aria-hidden="true">
+      <div class="modal-card">
+        <h3 id="modal-title">¿Reiniciar instancia?</h3>
+        <p id="modal-body" class="muted">
+          Se borran todos los datos de esta instancia (entrenador, colaborador, fechas, tareas,
+          comentarios). No se puede deshacer.
+        </p>
+        <div class="modal-actions">
+          <button id="modal-cancel" class="btn btn-ghost" type="button">Cancelar</button>
+          <button id="modal-confirm" class="btn btn-danger" type="button">Reiniciar</button>
+        </div>
+      </div>
+    </div>
+
+    <script src="data.js"></script>
+    <script src="app.js"></script>
+  </body>
+</html>
