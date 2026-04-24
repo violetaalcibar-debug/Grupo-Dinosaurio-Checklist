@@ -1,4 +1,14 @@
 /**
+ * Credenciales de Supabase.
+ * Completá SUPABASE_URL y SUPABASE_ANON_KEY con los valores reales de tu proyecto.
+ * Project Settings → API → Project URL + anon public key.
+ */
+window.DineoConfig = {
+  SUPABASE_URL: "https://pigijxbgxvenhggzvtqs.supabase.co",
+  SUPABASE_ANON_KEY: "sb_publishable_T8s7otK4vBu0cYHF4ADHCg_anV1IZLI",
+};
+
+/**
  * data.js
  * --------
  * Fuente de datos del programa "Dino Talento" (Grupo Dinosaurio).

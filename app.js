@@ -1,118 +1,68 @@
 /**
- * app.js
- * -------
- * Lógica principal de la app Dino Talento (Programa Formaciones · Grupo Dinosaurio).
+ * app.js — Dino Talento (Programa Formaciones · Grupo Dinosaurio)
  *
- * Persistencia: sessionStorage (se borra al cerrar la pestaña).
- * Cada pestaña = su propio expediente. Dos pestañas simultáneas del mismo puesto
- * = dos colaboradores distintos, estados independientes.
- * Al cerrar la pestaña se borra todo → la próxima apertura arranca limpia.
- * El refresh del tab mantiene el estado (sessionStorage sobrevive al F5).
- *
- * Estructura:
- *   dino:v3:<tabId>:meta    → { [stageId]: { entrenador, legajo_entrenador, ... } }
- *   dino:v3:<tabId>:tasks   → { [stageId]: { [taskId]: { fecha, estado, comentario } } }
- *   dino:v3:<tabId>:ui      → { currentStage }
- *
- * Resolución del tabId:
- *   Se genera un UUID al primer load y se guarda en sessionStorage bajo
- *   "dino:v3:tab-id". Cada pestaña tiene su propio UUID, aislado del resto.
+ * Persistencia: Supabase (tabla checklists).
+ * Cada fila = un expediente de un colaborador en un puesto.
+ * El picker lista todos los expedientes del puesto activo.
+ * Autosave con debounce de 500 ms en cada cambio.
  */
 
 (() => {
   "use strict";
 
-  const STORAGE_PREFIX = "dino:v3";
-  const TAB_ID_KEY = `${STORAGE_PREFIX}:tab-id`;
+  // ---------- Credenciales ----------
+  const cfg = window.DineoConfig || {};
+  const SUPABASE_URL = (cfg.SUPABASE_URL || "").trim();
+  const SUPABASE_ANON_KEY = (cfg.SUPABASE_ANON_KEY || "").trim();
+  const credsMissing =
+    !SUPABASE_URL ||
+    SUPABASE_URL.includes("TU-PROJECT") ||
+    !SUPABASE_ANON_KEY ||
+    SUPABASE_ANON_KEY === "eyJ..." ||
+    SUPABASE_ANON_KEY.length < 20;
+
+  // ---------- Constantes ----------
   const ESTADOS = ["", "Pendiente", "En proceso", "Finalizado"];
-
-  // ---------- URL params ----------
-  // ?stage=<id> → fija un único checklist (modo "un iframe por puesto").
   const urlParams = new URLSearchParams(window.location.search);
+  const lockedStageId = urlParams.get("stage") || null;
 
-  // ---------- Instance (por pestaña) ----------
-  // UUID generado una vez por pestaña. Vive en sessionStorage.
-  // Nuevo tab → nuevo UUID → storage vacío.
-  // Refresh del mismo tab → se mantiene el UUID → se mantiene el estado.
-  // Cierre del tab → sessionStorage se borra → se pierde todo.
-  function getOrCreateTabId() {
-    try {
-      let id = sessionStorage.getItem(TAB_ID_KEY);
-      if (!id) {
-        id = crypto.randomUUID().slice(0, 8);
-        sessionStorage.setItem(TAB_ID_KEY, id);
-      }
-      return id;
-    } catch {
-      // sessionStorage bloqueado (incógnito estricto, etc.): UUID volátil en memoria.
-      return crypto.randomUUID().slice(0, 8);
-    }
+  // ---------- Supabase client ----------
+  let db = null;
+  if (!credsMissing) {
+    db = window.supabase.createClient(SUPABASE_URL, SUPABASE_ANON_KEY);
   }
-  const instanceId = getOrCreateTabId();
-  const lockedStageId = urlParams.get("stage") || null; // si viene, la app queda fijada a ese puesto
-  const KEYS = {
-    meta: `${STORAGE_PREFIX}:${instanceId}:meta`,
-    tasks: `${STORAGE_PREFIX}:${instanceId}:tasks`,
-    ui: `${STORAGE_PREFIX}:${instanceId}:ui`,
-  };
-
-  // ---------- Storage ----------
-  function readJSON(key, fallback) {
-    try {
-      const raw = sessionStorage.getItem(key);
-      return raw ? JSON.parse(raw) : fallback;
-    } catch {
-      return fallback;
-    }
-  }
-  function writeJSON(key, value) {
-    try {
-      sessionStorage.setItem(key, JSON.stringify(value));
-    } catch (err) {
-      console.warn("[Dino Talento] No se pudo persistir:", err);
-    }
-  }
-
-  // ---------- Warning al cerrar con datos sin exportar ----------
-  let hasUnsavedData = false;
-  function markDirty() { hasUnsavedData = true; }
-  function markExported() { hasUnsavedData = false; }
-  window.addEventListener("beforeunload", (e) => {
-    if (hasUnsavedData) {
-      e.preventDefault();
-      e.returnValue = "Tenés datos sin exportar. ¿Seguro que querés cerrar?";
-      return e.returnValue;
-    }
-  });
 
   // ---------- State ----------
   const state = {
     stages: [],
     currentStageId: null,
-    meta: readJSON(KEYS.meta, {}),
-    tasks: readJSON(KEYS.tasks, {}),
-    ui: readJSON(KEYS.ui, { currentStage: null }),
+    mode: "picker",           // "picker" | "form"
+    currentChecklistId: null, // UUID de la fila activa en DB
+    currentChecklist: null,   // { meta, tasks }
+    pickerItems: [],          // lista cargada del picker actual
   };
 
   // ---------- Elements ----------
   const $ = (sel) => document.querySelector(sel);
   const els = {
-    stageNav: $("#stage-nav"),
-    stageTitle: $("#stage-title"),
-    stageForm: $("#stage-form"),
-    taskTable: $("#task-table"),
-    stageBar: $("#stage-progress-bar"),
-    stageText: $("#stage-progress-text"),
-    stageDetail: $("#stage-progress-detail"),
-    instanceId: $("#instance-id"),
-    resetBtn: $("#reset-btn"),
-    exportXlsx: $("#export-xlsx"),
-    exportPdf: $("#export-pdf"),
-    exportCsv: $("#export-csv"),
-    toast: $("#toast"),
-    modal: $("#modal"),
-    modalCancel: $("#modal-cancel"),
-    modalConfirm: $("#modal-confirm"),
+    stageNav:      $("#stage-nav"),
+    stageTitle:    $("#stage-title"),
+    stageForm:     $("#stage-form"),
+    pickerView:    $("#picker-view"),
+    formView:      $("#form-view"),
+    taskTable:     $("#task-table"),
+    stageBar:      $("#stage-progress-bar"),
+    stageText:     $("#stage-progress-text"),
+    stageDetail:   $("#stage-progress-detail"),
+    backBtn:       $("#back-btn"),
+    exportXlsx:    $("#export-xlsx"),
+    exportPdf:     $("#export-pdf"),
+    exportCsv:     $("#export-csv"),
+    saveIndicator: $("#save-indicator"),
+    toast:         $("#toast"),
+    modal:         $("#modal"),
+    modalCancel:   $("#modal-cancel"),
+    modalConfirm:  $("#modal-confirm"),
   };
 
   // ---------- Utils ----------
@@ -122,20 +72,20 @@
     clearTimeout(showToast._t);
     showToast._t = setTimeout(() => els.toast.classList.remove("show"), 2000);
   }
+
   function openModal({ title, body, onConfirm }) {
     $("#modal-title").textContent = title;
     $("#modal-body").textContent = body;
     els.modal.classList.add("open");
     els.modal.setAttribute("aria-hidden", "false");
-    els.modalConfirm.onclick = () => {
-      closeModal();
-      onConfirm?.();
-    };
+    els.modalConfirm.onclick = () => { closeModal(); onConfirm?.(); };
   }
+
   function closeModal() {
     els.modal.classList.remove("open");
     els.modal.setAttribute("aria-hidden", "true");
   }
+
   els.modalCancel.addEventListener("click", closeModal);
   els.modal.addEventListener("click", (e) => { if (e.target === els.modal) closeModal(); });
 
@@ -151,50 +101,266 @@
     return out;
   }
 
-  function stageTotals(stage) {
-    const all = flattenTasks(stage);
-    const data = state.tasks[stage.id] || {};
-    const done = all.filter((t) => data[t.id]?.estado === "Finalizado").length;
-    return { total: all.length, done, pct: all.length ? Math.round((done / all.length) * 100) : 0 };
+  function debounce(fn, ms) {
+    let t;
+    return (...args) => { clearTimeout(t); t = setTimeout(() => fn(...args), ms); };
+  }
+
+  // ---------- Save indicator ----------
+  function showSaving() {
+    els.saveIndicator.textContent = "Guardando…";
+    els.saveIndicator.dataset.state = "saving";
+  }
+  function showSaved() {
+    els.saveIndicator.textContent = "Guardado";
+    els.saveIndicator.dataset.state = "saved";
+    clearTimeout(showSaved._t);
+    showSaved._t = setTimeout(() => {
+      els.saveIndicator.textContent = "";
+      delete els.saveIndicator.dataset.state;
+    }, 2000);
+  }
+
+  // ---------- Supabase API ----------
+  async function listChecklists(stageId) {
+    const { data, error } = await db
+      .from("checklists")
+      .select("id, colaborador, tareas_totales, tareas_finalizadas, resultado, updated_at")
+      .eq("stage_id", stageId)
+      .order("updated_at", { ascending: false });
+    if (error) throw error;
+    return data || [];
+  }
+
+  async function createChecklist(stage) {
+    const taskCount = flattenTasks(stage).length;
+    const { data, error } = await db
+      .from("checklists")
+      .insert({
+        stage_id: stage.id,
+        stage_name: stage.name,
+        meta: {
+          colaborador: "", entrenador: "",
+          legajo_entrenador: "", legajo_colaborador: "",
+          fecha_inicio: "", fecha_fin: "",
+          resultado: "", observaciones: "",
+          puesto: stage.name,
+        },
+        tasks: {},
+        tareas_totales: taskCount,
+        tareas_finalizadas: 0,
+      })
+      .select()
+      .single();
+    if (error) throw error;
+    return data;
+  }
+
+  async function loadChecklist(id) {
+    const { data, error } = await db
+      .from("checklists")
+      .select("*")
+      .eq("id", id)
+      .single();
+    if (error) throw error;
+    return data;
+  }
+
+  async function saveChecklist(id, patch) {
+    const { error } = await db.from("checklists").update(patch).eq("id", id);
+    if (error) throw error;
+  }
+
+  async function removeChecklist(id) {
+    const { error } = await db.from("checklists").delete().eq("id", id);
+    if (error) throw error;
+  }
+
+  // ---------- Autosave (debounce 500 ms) ----------
+  const debouncedSave = debounce(async () => {
+    if (!state.currentChecklistId || !state.currentChecklist) return;
+    showSaving();
+    const { meta, tasks } = state.currentChecklist;
+    const stage = state.stages.find((s) => s.id === state.currentStageId);
+    const allTasks = stage ? flattenTasks(stage) : [];
+    const total = allTasks.length;
+    const done = allTasks.filter((t) => tasks[t.id]?.estado === "Finalizado").length;
+    try {
+      await saveChecklist(state.currentChecklistId, {
+        meta,
+        tasks,
+        colaborador: meta.colaborador || "",
+        entrenador: meta.entrenador || "",
+        resultado: meta.resultado || "",
+        tareas_totales: total,
+        tareas_finalizadas: done,
+      });
+      showSaved();
+    } catch (err) {
+      console.error("[Dino Talento] Error guardando:", err);
+      els.saveIndicator.textContent = "Error al guardar";
+      els.saveIndicator.dataset.state = "error";
+    }
+  }, 500);
+
+  // ---------- View mode ----------
+  function setMode(mode) {
+    state.mode = mode;
+    const isForm = mode === "form";
+    els.pickerView.hidden = isForm;
+    els.formView.hidden = !isForm;
+    els.backBtn.hidden = !isForm;
+    els.exportXlsx.hidden = !isForm;
+    els.exportPdf.hidden = !isForm;
+    els.exportCsv.hidden = !isForm;
   }
 
   // ---------- Render: sidebar ----------
   function renderSidebar() {
     els.stageNav.innerHTML = "";
     state.stages.forEach((stage) => {
-      const { done, total, pct } = stageTotals(stage);
       const btn = document.createElement("button");
       btn.type = "button";
       btn.className = `stage-nav-item ${state.currentStageId === stage.id ? "active" : ""}`;
-      btn.innerHTML = `
-        <div class="top-row">
-          <span>${escapeHtml(stage.name)}</span>
-          <span class="badge">${done}/${total}</span>
-        </div>
-        <div class="mini-progress"><div class="mini-progress-bar" style="width:${pct}%"></div></div>
-      `;
+      btn.innerHTML = `<div class="top-row"><span>${escapeHtml(stage.name)}</span></div>`;
       btn.addEventListener("click", () => setCurrentStage(stage.id));
       els.stageNav.appendChild(btn);
     });
-    els.instanceId.textContent = instanceId;
+  }
+
+  // ---------- Render: picker ----------
+  async function renderPicker(stage) {
+    setMode("picker");
+    els.stageTitle.textContent = stage.name;
+    els.pickerView.innerHTML = `<div class="picker"><div class="picker-loading">Cargando…</div></div>`;
+
+    try {
+      state.pickerItems = await listChecklists(stage.id);
+    } catch (err) {
+      els.pickerView.innerHTML = `<div class="picker"><div class="picker-empty">Error al cargar: ${escapeHtml(err.message)}</div></div>`;
+      return;
+    }
+
+    const inProgress = state.pickerItems.filter((c) => !c.resultado);
+    const finished   = state.pickerItems.filter((c) => !!c.resultado);
+
+    function fmtDate(iso) {
+      if (!iso) return "";
+      return new Date(iso).toLocaleDateString("es-AR", { day: "2-digit", month: "2-digit", year: "2-digit" });
+    }
+
+    function renderItems(items) {
+      return items.map((c) => {
+        const total = c.tareas_totales || 0;
+        const done  = c.tareas_finalizadas || 0;
+        const pct   = total ? Math.round((done / total) * 100) : 0;
+        const badge = c.resultado
+          ? `<span class="picker-resultado picker-resultado--${c.resultado === "APTO" ? "apto" : "noapto"}">${escapeHtml(c.resultado)}</span>`
+          : "";
+        return `
+          <div class="picker-item" data-id="${escapeHtml(c.id)}">
+            <div class="picker-item-main">
+              <div class="picker-item-name">${escapeHtml(c.colaborador || "Sin nombre")} ${badge}</div>
+              <div class="picker-item-meta">${done}/${total} tareas · ${fmtDate(c.updated_at)}</div>
+              <div class="picker-mini-progress"><div class="picker-mini-bar" style="width:${pct}%"></div></div>
+            </div>
+            <button class="btn btn-ghost btn-sm picker-delete" data-id="${escapeHtml(c.id)}" title="Eliminar" type="button">🗑</button>
+          </div>`;
+      }).join("");
+    }
+
+    const inProgressHtml = inProgress.length
+      ? `<div class="picker-section"><div class="picker-section-title">En progreso</div>${renderItems(inProgress)}</div>`
+      : "";
+    const finishedHtml = finished.length
+      ? `<div class="picker-section"><div class="picker-section-title">Finalizados</div>${renderItems(finished)}</div>`
+      : "";
+    const emptyHtml = !state.pickerItems.length
+      ? `<div class="picker-empty">No hay checklists para este puesto todavía.<br>Creá el primero con el botón de abajo.</div>`
+      : "";
+
+    els.pickerView.innerHTML = `
+      <div class="picker">
+        <div class="picker-header">${escapeHtml(stage.name)} — Checklists</div>
+        ${inProgressHtml}${finishedHtml}${emptyHtml}
+        <div class="picker-footer">
+          <button class="btn picker-new" id="picker-new-btn" type="button">➕ Nuevo colaborador</button>
+        </div>
+      </div>`;
+
+    // Wire: abrir item
+    els.pickerView.querySelectorAll(".picker-item").forEach((item) => {
+      item.addEventListener("click", async (e) => {
+        if (e.target.closest(".picker-delete")) return;
+        await openChecklist(item.dataset.id, stage);
+      });
+    });
+
+    // Wire: eliminar item
+    els.pickerView.querySelectorAll(".picker-delete").forEach((btn) => {
+      btn.addEventListener("click", (e) => {
+        e.stopPropagation();
+        const id = btn.dataset.id;
+        const item = state.pickerItems.find((c) => c.id === id);
+        openModal({
+          title: "¿Eliminar checklist?",
+          body: `Se eliminará el expediente de "${item?.colaborador || "Sin nombre"}". Esta acción no se puede deshacer.`,
+          onConfirm: async () => {
+            try {
+              await removeChecklist(id);
+              showToast("Checklist eliminado");
+              await renderPicker(stage);
+            } catch (err) {
+              showToast("Error al eliminar: " + err.message);
+            }
+          },
+        });
+      });
+    });
+
+    // Wire: nuevo
+    $("#picker-new-btn").addEventListener("click", async () => {
+      try {
+        const row = await createChecklist(stage);
+        await openChecklist(row.id, stage);
+      } catch (err) {
+        showToast("Error al crear: " + err.message);
+      }
+    });
+  }
+
+  // ---------- Abrir un checklist ----------
+  async function openChecklist(id, stage) {
+    try {
+      const row = await loadChecklist(id);
+      state.currentChecklistId = row.id;
+      state.currentChecklist = { meta: row.meta || {}, tasks: row.tasks || {} };
+      setMode("form");
+      els.stageTitle.textContent = stage.name;
+      renderForm(stage);
+      renderStageProgress(stage);
+      renderTaskTable(stage);
+    } catch (err) {
+      showToast("Error al cargar: " + err.message);
+    }
   }
 
   // ---------- Render: form (cabecera) ----------
   function renderForm(stage) {
-    const meta = state.meta[stage.id] || {};
+    const meta = state.currentChecklist?.meta || {};
     els.stageForm.querySelectorAll("[data-meta]").forEach((el) => {
       const key = el.dataset.meta;
-      if (key === "puesto") {
-        el.value = stage.name;
-      } else {
-        el.value = meta[key] ?? "";
-      }
+      el.value = key === "puesto" ? stage.name : (meta[key] ?? "");
     });
   }
 
   // ---------- Render: progress ----------
   function renderStageProgress(stage) {
-    const { done, total, pct } = stageTotals(stage);
+    const all   = flattenTasks(stage);
+    const tasks = state.currentChecklist?.tasks || {};
+    const done  = all.filter((t) => tasks[t.id]?.estado === "Finalizado").length;
+    const total = all.length;
+    const pct   = total ? Math.round((done / total) * 100) : 0;
     els.stageBar.style.width = `${pct}%`;
     els.stageText.textContent = `${pct}%`;
     els.stageDetail.textContent = `${done} / ${total} tareas finalizadas`;
@@ -203,19 +369,18 @@
   // ---------- Render: task table ----------
   function renderTaskTable(stage) {
     const tasks = flattenTasks(stage);
-    const data = state.tasks[stage.id] || {};
+    const data  = state.currentChecklist?.tasks || {};
 
     const header = `
       <div class="th">Guía de tareas</div>
       <div class="th">Fecha del encuentro</div>
       <div class="th">Estado de avance</div>
-      <div class="th">Comentarios</div>
-    `;
+      <div class="th">Comentarios</div>`;
 
     const rows = tasks.map((task, i) => {
       const t = data[task.id] || {};
-      const estado = t.estado || "";
-      const fecha = t.fecha || "";
+      const estado     = t.estado || "";
+      const fecha      = t.fecha || "";
       const comentario = t.comentario || "";
       return `
         <div class="task-row" data-task-id="${escapeHtml(task.id)}" data-status="${escapeHtml(estado)}" style="display:contents">
@@ -234,13 +399,11 @@
           <div class="cell-comment">
             <textarea data-field="comentario" rows="1" placeholder="Comentarios…">${escapeHtml(comentario)}</textarea>
           </div>
-        </div>
-      `;
+        </div>`;
     }).join("");
 
     els.taskTable.innerHTML = header + rows;
 
-    // Wire inputs
     els.taskTable.querySelectorAll(".task-row").forEach((row) => {
       const taskId = row.dataset.taskId;
       row.querySelectorAll("[data-field]").forEach((input) => {
@@ -252,226 +415,161 @@
     });
   }
 
-  function debounce(fn, ms) {
-    let t;
-    return (...args) => {
-      clearTimeout(t);
-      t = setTimeout(() => fn(...args), ms);
-    };
-  }
-
+  // ---------- Update task field ----------
   function updateTaskField(stageId, taskId, field, value, rowEl) {
-    state.tasks[stageId] = state.tasks[stageId] || {};
-    state.tasks[stageId][taskId] = state.tasks[stageId][taskId] || {};
-    state.tasks[stageId][taskId][field] = value;
-    writeJSON(KEYS.tasks, state.tasks);
-    markDirty();
-
+    if (!state.currentChecklist) return;
+    state.currentChecklist.tasks[taskId] = state.currentChecklist.tasks[taskId] || {};
+    state.currentChecklist.tasks[taskId][field] = value;
     if (field === "estado") {
       rowEl.dataset.status = value;
-      // Re-render progress + sidebar
       const stage = state.stages.find((s) => s.id === stageId);
-      renderStageProgress(stage);
-      renderSidebar();
+      if (stage) renderStageProgress(stage);
     }
-  }
-
-  function setCurrentStage(stageId) {
-    state.currentStageId = stageId;
-    state.ui.currentStage = stageId;
-    writeJSON(KEYS.ui, state.ui);
-    renderSidebar();
-    const stage = state.stages.find((s) => s.id === stageId);
-    if (!stage) return;
-    els.stageTitle.textContent = stage.name;
-    renderForm(stage);
-    renderStageProgress(stage);
-    renderTaskTable(stage);
+    debouncedSave();
   }
 
   // ---------- Form wiring (cabecera) ----------
   els.stageForm.addEventListener("input", (e) => {
     const el = e.target.closest("[data-meta]");
-    if (!el) return;
+    if (!el || !state.currentChecklist) return;
     const key = el.dataset.meta;
-    if (key === "puesto") return; // readonly, vinculado al stage
-    state.meta[state.currentStageId] = state.meta[state.currentStageId] || {};
-    state.meta[state.currentStageId][key] = el.value;
-    // Store puesto too for exports
-    state.meta[state.currentStageId].puesto =
-      state.stages.find((s) => s.id === state.currentStageId)?.name || "";
-    debouncedSaveMeta();
-  });
-  const debouncedSaveMeta = debounce(() => {
-    writeJSON(KEYS.meta, state.meta);
-    markDirty();
-  }, 250);
-
-  // ---------- Reset ----------
-  els.resetBtn.addEventListener("click", () => {
-    openModal({
-      title: "¿Reiniciar instancia?",
-      body: `Se borran todos los datos de esta instancia (${instanceId}): campos del entrenamiento, fechas, estados, comentarios y observaciones. No se puede deshacer.`,
-      onConfirm: () => {
-        state.meta = {};
-        state.tasks = {};
-        writeJSON(KEYS.meta, state.meta);
-        writeJSON(KEYS.tasks, state.tasks);
-        const stage = state.stages.find((s) => s.id === state.currentStageId);
-        renderSidebar();
-        if (stage) {
-          renderForm(stage);
-          renderStageProgress(stage);
-          renderTaskTable(stage);
-        }
-        showToast("Instancia reiniciada");
-      },
-    });
+    if (key === "puesto") return;
+    state.currentChecklist.meta = state.currentChecklist.meta || {};
+    state.currentChecklist.meta[key] = el.value;
+    debouncedSave();
   });
 
-  // ---------- Exports ----------
-  function buildStageRows(stage) {
-    const tasks = flattenTasks(stage);
-    const data = state.tasks[stage.id] || {};
-    return tasks.map((t, i) => {
-      const d = data[t.id] || {};
-      return {
-        "#": i + 1,
-        Puesto: stage.name,
-        Tarea: t.title,
-        "Fecha del encuentro": d.fecha || "",
-        "Estado de avance": d.estado || "",
-        Comentarios: d.comentario || "",
-      };
-    });
+  // ---------- Back button ----------
+  els.backBtn.addEventListener("click", async () => {
+    state.currentChecklistId = null;
+    state.currentChecklist = null;
+    const stage = state.stages.find((s) => s.id === state.currentStageId);
+    if (stage) { renderSidebar(); await renderPicker(stage); }
+  });
+
+  // ---------- Set current stage ----------
+  async function setCurrentStage(stageId) {
+    state.currentStageId = stageId;
+    state.currentChecklistId = null;
+    state.currentChecklist = null;
+    renderSidebar();
+    const stage = state.stages.find((s) => s.id === stageId);
+    if (stage) await renderPicker(stage);
+  }
+
+  // ---------- Exports (checklist actual) ----------
+  function getExportData() {
+    const stage = state.stages.find((s) => s.id === state.currentStageId);
+    const meta  = state.currentChecklist?.meta || {};
+    const tasks = state.currentChecklist?.tasks || {};
+    return { stage, meta, tasks };
   }
 
   function exportToCSV() {
-    const rows = state.stages.flatMap(buildStageRows);
-    const csv = Papa.unparse(rows);
-    triggerDownload(new Blob([csv], { type: "text/csv;charset=utf-8;" }), filename("csv"));
-    markExported();
+    const { stage, meta, tasks } = getExportData();
+    if (!stage) { showToast("Abrí un checklist primero"); return; }
+    const rows = flattenTasks(stage).map((t, i) => {
+      const d = tasks[t.id] || {};
+      return {
+        "#": i + 1, Puesto: stage.name, Colaborador: meta.colaborador || "",
+        Tarea: t.title, "Fecha del encuentro": d.fecha || "",
+        "Estado de avance": d.estado || "", Comentarios: d.comentario || "",
+      };
+    });
+    triggerDownload(new Blob([Papa.unparse(rows)], { type: "text/csv;charset=utf-8;" }), filename("csv"));
     showToast("CSV descargado");
   }
 
   function exportToXLSX() {
-    const wb = XLSX.utils.book_new();
-    state.stages.forEach((stage) => {
-      const meta = state.meta[stage.id] || {};
-      // Cabecera tipo modelo + tabla de tareas
-      const aoa = [
-        ["Dino Talento"],
-        ['PROGRAMA FORMACIONES'],
-        ['"Tu Desarrollo en Grupo Dinosaurio"'],
-        [],
-        ["Apellido y Nombre del entrenador:", meta.entrenador || ""],
-        ["Nº de Legajo:", meta.legajo_entrenador || ""],
-        ["Apellido y Nombre del colaborador entrenado:", meta.colaborador || ""],
-        ["Nº de Legajo:", meta.legajo_colaborador || ""],
-        ["Fecha de Inicio del entrenamiento:", meta.fecha_inicio || ""],
-        ["Fecha de Fin del entrenamiento:", meta.fecha_fin || ""],
-        ["Puesto en el que se entrenó:", stage.name],
-        ["Resultado:", meta.resultado || ""],
-        ["Observaciones:", meta.observaciones || ""],
-        [],
-        ["Guía de tareas", "Fecha del encuentro", "Estado de avance", "Comentarios"],
-      ];
-      flattenTasks(stage).forEach((t) => {
-        const d = (state.tasks[stage.id] || {})[t.id] || {};
-        aoa.push([t.title, d.fecha || "", d.estado || "", d.comentario || ""]);
-      });
-      const ws = XLSX.utils.aoa_to_sheet(aoa);
-      ws["!cols"] = [{ wch: 60 }, { wch: 18 }, { wch: 18 }, { wch: 40 }];
-      const safeName = stage.name.replace(/[\\\/\*\?\:\[\]]/g, "").slice(0, 31);
-      XLSX.utils.book_append_sheet(wb, ws, safeName);
+    const { stage, meta, tasks } = getExportData();
+    if (!stage) { showToast("Abrí un checklist primero"); return; }
+    const aoa = [
+      ["Dino Talento"], ["PROGRAMA FORMACIONES"], ['"Tu Desarrollo en Grupo Dinosaurio"'], [],
+      ["Apellido y Nombre del entrenador:", meta.entrenador || ""],
+      ["Nº de Legajo:", meta.legajo_entrenador || ""],
+      ["Apellido y Nombre del colaborador entrenado:", meta.colaborador || ""],
+      ["Nº de Legajo:", meta.legajo_colaborador || ""],
+      ["Fecha de Inicio del entrenamiento:", meta.fecha_inicio || ""],
+      ["Fecha de Fin del entrenamiento:", meta.fecha_fin || ""],
+      ["Puesto en el que se entrenó:", stage.name],
+      ["Resultado:", meta.resultado || ""],
+      ["Observaciones:", meta.observaciones || ""], [],
+      ["Guía de tareas", "Fecha del encuentro", "Estado de avance", "Comentarios"],
+    ];
+    flattenTasks(stage).forEach((t) => {
+      const d = tasks[t.id] || {};
+      aoa.push([t.title, d.fecha || "", d.estado || "", d.comentario || ""]);
     });
+    const ws = XLSX.utils.aoa_to_sheet(aoa);
+    ws["!cols"] = [{ wch: 60 }, { wch: 18 }, { wch: 18 }, { wch: 40 }];
+    const wb = XLSX.utils.book_new();
+    XLSX.utils.book_append_sheet(wb, ws, stage.name.replace(/[\\\/\*\?\:\[\]]/g, "").slice(0, 31));
     XLSX.writeFile(wb, filename("xlsx"));
-    markExported();
     showToast("Excel descargado");
   }
 
   function exportToPDF() {
+    const { stage, meta, tasks } = getExportData();
+    if (!stage) { showToast("Abrí un checklist primero"); return; }
     const { jsPDF } = window.jspdf;
     const doc = new jsPDF({ unit: "pt", format: "a4" });
     const marginX = 40;
+    let y = 48;
 
-    state.stages.forEach((stage, idx) => {
-      if (idx > 0) doc.addPage();
-      let y = 48;
-      const meta = state.meta[stage.id] || {};
+    doc.setFont("helvetica", "bold"); doc.setFontSize(16);
+    doc.text("Dino Talento", marginX, y); y += 16;
+    doc.setFontSize(11); doc.setTextColor(90);
+    doc.text('PROGRAMA FORMACIONES — "Tu Desarrollo en Grupo Dinosaurio"', marginX, y);
+    y += 18; doc.setTextColor(0);
 
-      doc.setFont("helvetica", "bold");
-      doc.setFontSize(16);
-      doc.text("Dino Talento", marginX, y);
-      y += 16;
-      doc.setFontSize(11);
-      doc.setTextColor(90);
-      doc.text('PROGRAMA FORMACIONES — "Tu Desarrollo en Grupo Dinosaurio"', marginX, y);
-      y += 18;
-      doc.setTextColor(0);
-
-      // Meta como minitable
-      const metaBody = [
+    doc.autoTable({
+      startY: y, margin: { left: marginX, right: marginX },
+      body: [
         ["Entrenador", meta.entrenador || "", "Nº Legajo", meta.legajo_entrenador || ""],
         ["Colaborador entrenado", meta.colaborador || "", "Nº Legajo", meta.legajo_colaborador || ""],
         ["Fecha inicio", meta.fecha_inicio || "", "Fecha fin", meta.fecha_fin || ""],
         ["Puesto", stage.name, "Resultado", meta.resultado || ""],
-      ];
-      doc.autoTable({
-        startY: y,
-        margin: { left: marginX, right: marginX },
-        body: metaBody,
-        styles: { fontSize: 9, cellPadding: 4 },
-        columnStyles: {
-          0: { fontStyle: "bold", fillColor: [241, 243, 249], cellWidth: 110 },
-          2: { fontStyle: "bold", fillColor: [241, 243, 249], cellWidth: 80 },
-        },
-        theme: "grid",
-      });
-      y = doc.lastAutoTable.finalY + 6;
+      ],
+      styles: { fontSize: 9, cellPadding: 4 },
+      columnStyles: {
+        0: { fontStyle: "bold", fillColor: [241, 243, 249], cellWidth: 110 },
+        2: { fontStyle: "bold", fillColor: [241, 243, 249], cellWidth: 80 },
+      },
+      theme: "grid",
+    });
+    y = doc.lastAutoTable.finalY + 6;
 
-      if (meta.observaciones) {
-        doc.setFont("helvetica", "bold");
-        doc.setFontSize(10);
-        doc.text("Observaciones:", marginX, y + 12);
-        doc.setFont("helvetica", "normal");
-        const wrapped = doc.splitTextToSize(meta.observaciones, 515);
-        doc.text(wrapped, marginX, y + 26);
-        y += 26 + wrapped.length * 12;
-      }
+    if (meta.observaciones) {
+      doc.setFont("helvetica", "bold"); doc.setFontSize(10);
+      doc.text("Observaciones:", marginX, y + 12);
+      doc.setFont("helvetica", "normal");
+      const wrapped = doc.splitTextToSize(meta.observaciones, 515);
+      doc.text(wrapped, marginX, y + 26);
+      y += 26 + wrapped.length * 12;
+    }
 
-      // Tabla de tareas
-      const body = flattenTasks(stage).map((t, i) => {
-        const d = (state.tasks[stage.id] || {})[t.id] || {};
+    doc.autoTable({
+      startY: y + 8, margin: { left: marginX, right: marginX },
+      head: [["#", "Guía de tareas", "Fecha", "Estado", "Comentarios"]],
+      body: flattenTasks(stage).map((t, i) => {
+        const d = tasks[t.id] || {};
         return [i + 1, t.title, d.fecha || "", d.estado || "", d.comentario || ""];
-      });
-      doc.autoTable({
-        startY: y + 8,
-        margin: { left: marginX, right: marginX },
-        head: [["#", "Guía de tareas", "Fecha", "Estado", "Comentarios"]],
-        body,
-        styles: { fontSize: 9, cellPadding: 5 },
-        headStyles: { fillColor: [46, 125, 50], textColor: 255 },
-        alternateRowStyles: { fillColor: [246, 247, 251] },
-        columnStyles: {
-          0: { cellWidth: 24, halign: "center" },
-          2: { cellWidth: 70 },
-          3: { cellWidth: 70 },
-          4: { cellWidth: 140 },
-        },
-        didParseCell: (data) => {
-          if (data.section === "body" && data.column.index === 3) {
-            const v = data.cell.raw;
-            if (v === "Finalizado") data.cell.styles.textColor = [22, 120, 60];
-            else if (v === "En proceso") data.cell.styles.textColor = [180, 110, 10];
-            else if (v === "Pendiente") data.cell.styles.textColor = [90, 90, 90];
-          }
-        },
-      });
+      }),
+      styles: { fontSize: 9, cellPadding: 5 },
+      headStyles: { fillColor: [46, 125, 50], textColor: 255 },
+      alternateRowStyles: { fillColor: [246, 247, 251] },
+      columnStyles: { 0: { cellWidth: 24, halign: "center" }, 2: { cellWidth: 70 }, 3: { cellWidth: 70 }, 4: { cellWidth: 140 } },
+      didParseCell: (data) => {
+        if (data.section === "body" && data.column.index === 3) {
+          const v = data.cell.raw;
+          if (v === "Finalizado")  data.cell.styles.textColor = [22, 120, 60];
+          else if (v === "En proceso") data.cell.styles.textColor = [180, 110, 10];
+          else if (v === "Pendiente")  data.cell.styles.textColor = [90, 90, 90];
+        }
+      },
     });
 
     doc.save(filename("pdf"));
-    markExported();
     showToast("PDF descargado");
   }
 
@@ -480,44 +578,48 @@
   els.exportPdf.addEventListener("click", exportToPDF);
 
   function filename(ext) {
-    const stamp = new Date().toISOString().slice(0, 10);
-    return `dino-talento-${instanceId}-${stamp}.${ext}`;
+    const stage = state.stages.find((s) => s.id === state.currentStageId);
+    const sp = (stage?.name || "").toLowerCase().replace(/\s+/g, "-").replace(/[^a-z0-9-]/g, "").slice(0, 20);
+    const cp = (state.currentChecklist?.meta?.colaborador || "sin-nombre").toLowerCase().replace(/\s+/g, "-").replace(/[^a-z0-9-]/g, "").slice(0, 20) || "sin-nombre";
+    return `dino-talento-${sp}-${cp}-${new Date().toISOString().slice(0, 10)}.${ext}`;
   }
 
   function triggerDownload(blob, name) {
     const url = URL.createObjectURL(blob);
     const a = document.createElement("a");
-    a.href = url;
-    a.download = name;
-    document.body.appendChild(a);
-    a.click();
-    a.remove();
+    a.href = url; a.download = name;
+    document.body.appendChild(a); a.click(); a.remove();
     setTimeout(() => URL.revokeObjectURL(url), 1000);
   }
 
   // ---------- Boot ----------
   async function boot() {
-    els.taskTable.innerHTML = `
-      <div class="th">Guía de tareas</div>
-      <div class="th">Fecha del encuentro</div>
-      <div class="th">Estado de avance</div>
-      <div class="th">Comentarios</div>
-      <div class="cell-task"><div class="skeleton" style="width:70%"></div></div>
-      <div class="cell-date"><div class="skeleton" style="width:60%"></div></div>
-      <div class="cell-status"><div class="skeleton" style="width:60%"></div></div>
-      <div class="cell-comment"><div class="skeleton" style="width:80%"></div></div>
-    `;
+    // Verificar credenciales
+    if (credsMissing) {
+      els.pickerView.hidden = false;
+      els.pickerView.innerHTML = `
+        <div class="config-pending">
+          <div class="config-pending-icon">⚙️</div>
+          <h2>Configuración pendiente</h2>
+          <p>Faltan credenciales de Supabase en <code>data.js</code>.</p>
+          <p>Completá <code>SUPABASE_URL</code> y <code>SUPABASE_ANON_KEY</code> y recargá la página.</p>
+        </div>`;
+      return;
+    }
+
     try {
       const allStages = await window.DineoData.loadStages();
 
-      // Modo "single" si viene ?stage=<id>: la app queda fijada a ese checklist.
       if (lockedStageId) {
         const locked = allStages.find((s) => s.id === lockedStageId);
         if (!locked) {
-          els.taskTable.innerHTML = `<div class="empty" style="grid-column:1/-1">
-            El checklist "${escapeHtml(lockedStageId)}" no existe. IDs válidos:
-            <br><br>${allStages.map((s) => `<code>${escapeHtml(s.id)}</code>`).join(" · ")}
-          </div>`;
+          els.pickerView.hidden = false;
+          els.pickerView.innerHTML = `
+            <div class="config-pending">
+              <h2>Puesto no encontrado</h2>
+              <p>El stage <code>${escapeHtml(lockedStageId)}</code> no existe.</p>
+              <p>IDs válidos: ${allStages.map((s) => `<code>${escapeHtml(s.id)}</code>`).join(" · ")}</p>
+            </div>`;
           return;
         }
         state.stages = [locked];
@@ -526,15 +628,12 @@
         state.stages = allStages;
       }
 
-      const preferred = state.ui.currentStage;
-      const initial =
-        lockedStageId ||
-        (preferred && state.stages.some((s) => s.id === preferred) && preferred) ||
-        (state.stages[0]?.id ?? null);
-      setCurrentStage(initial);
+      const initial = lockedStageId || state.stages[0]?.id || null;
+      if (initial) await setCurrentStage(initial);
     } catch (err) {
       console.error(err);
-      els.taskTable.innerHTML = `<div class="empty" style="grid-column:1/-1">Error cargando los datos. Revisá la consola.</div>`;
+      els.pickerView.hidden = false;
+      els.pickerView.innerHTML = `<div class="config-pending"><p>Error cargando datos. Revisá la consola.</p></div>`;
     }
   }
 

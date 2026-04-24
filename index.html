@@ -16,6 +16,8 @@
     <script src="https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js"></script>
     <script src="https://cdnjs.cloudflare.com/ajax/libs/jspdf/2.5.1/jspdf.umd.min.js"></script>
     <script src="https://cdnjs.cloudflare.com/ajax/libs/jspdf-autotable/3.8.2/jspdf.plugin.autotable.min.js"></script>
+    <!-- Supabase -->
+    <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2/dist/umd/supabase.min.js"></script>
   </head>
   <body>
     <div class="app" id="app">
@@ -32,13 +34,10 @@
         <nav id="stage-nav" class="stage-nav" aria-label="Navegación entre puestos"></nav>
 
         <div class="sidebar-footer">
-          <div class="instance-pill" title="Identificador único de esta instancia">
+          <div class="instance-pill" title="Backend de persistencia">
             <span class="dot"></span>
-            <span id="instance-id">—</span>
+            <span>Supabase</span>
           </div>
-          <button id="reset-btn" class="btn btn-ghost btn-sm" type="button">
-            Reiniciar instancia
-          </button>
         </div>
       </aside>
 
@@ -47,99 +46,106 @@
         <header class="topbar">
           <div class="topbar-left">
             <div class="topbar-kicker">Programa Formaciones — "Tu Desarrollo en Grupo Dinosaurio"</div>
-            <h1 id="stage-title">Cargando…</h1>
+            <div class="topbar-title-row">
+              <h1 id="stage-title">Cargando…</h1>
+              <span id="save-indicator" class="save-indicator"></span>
+            </div>
           </div>
           <div class="topbar-right">
-            <button id="export-xlsx" class="btn btn-secondary" type="button">Excel</button>
-            <button id="export-pdf" class="btn btn-secondary" type="button">PDF</button>
-            <button id="export-csv" class="btn btn-ghost" type="button">CSV</button>
+            <button id="back-btn" class="btn btn-ghost btn-sm" type="button" hidden>← Volver al listado</button>
+            <button id="export-xlsx" class="btn btn-secondary" type="button" hidden>Excel</button>
+            <button id="export-pdf" class="btn btn-secondary" type="button" hidden>PDF</button>
+            <button id="export-csv" class="btn btn-ghost" type="button" hidden>CSV</button>
           </div>
         </header>
 
-        <!-- Cabecera del checklist (campos del entrenamiento) -->
-        <section class="form-card" id="stage-form" aria-label="Datos del entrenamiento">
-          <div class="form-grid">
-            <label class="field">
-              <span>Apellido y Nombre del entrenador</span>
-              <input type="text" data-meta="entrenador" autocomplete="off" />
-            </label>
-            <label class="field">
-              <span>Nº de Legajo</span>
-              <input type="text" data-meta="legajo_entrenador" inputmode="numeric" autocomplete="off" />
-            </label>
-            <label class="field">
-              <span>Apellido y Nombre del colaborador entrenado</span>
-              <input type="text" data-meta="colaborador" autocomplete="off" />
-            </label>
-            <label class="field">
-              <span>Nº de Legajo</span>
-              <input type="text" data-meta="legajo_colaborador" inputmode="numeric" autocomplete="off" />
-            </label>
-            <label class="field">
-              <span>Fecha de inicio del entrenamiento</span>
-              <input type="date" data-meta="fecha_inicio" />
-            </label>
-            <label class="field">
-              <span>Fecha de fin del entrenamiento</span>
-              <input type="date" data-meta="fecha_fin" />
-            </label>
-            <label class="field">
-              <span>Puesto en el que se entrenó</span>
-              <input type="text" data-meta="puesto" readonly />
-            </label>
-            <label class="field">
-              <span>Resultado</span>
-              <select data-meta="resultado">
-                <option value="">—</option>
-                <option value="APTO">APTO</option>
-                <option value="NO APTO">NO APTO</option>
-              </select>
-            </label>
-          </div>
-          <label class="field field-full">
-            <span>Observaciones</span>
-            <textarea data-meta="observaciones" rows="3" placeholder="Observaciones generales sobre el entrenamiento…"></textarea>
-          </label>
-        </section>
+        <!-- Picker view (lista de colaboradores por puesto) -->
+        <div id="picker-view" hidden></div>
 
-        <!-- Progreso de esta etapa -->
-        <section class="stage-progress-card" aria-label="Progreso del checklist">
-          <div class="stage-progress-row">
-            <div class="progress">
-              <div id="stage-progress-bar" class="progress-bar" style="width: 0%"></div>
+        <!-- Form view (datos + progreso + tabla + firmas) -->
+        <div id="form-view" hidden>
+          <!-- Cabecera del checklist (campos del entrenamiento) -->
+          <section class="form-card" id="stage-form" aria-label="Datos del entrenamiento">
+            <div class="form-grid">
+              <label class="field">
+                <span>Apellido y Nombre del entrenador</span>
+                <input type="text" data-meta="entrenador" autocomplete="off" />
+              </label>
+              <label class="field">
+                <span>Nº de Legajo</span>
+                <input type="text" data-meta="legajo_entrenador" inputmode="numeric" autocomplete="off" />
+              </label>
+              <label class="field">
+                <span>Apellido y Nombre del colaborador entrenado</span>
+                <input type="text" data-meta="colaborador" autocomplete="off" />
+              </label>
+              <label class="field">
+                <span>Nº de Legajo</span>
+                <input type="text" data-meta="legajo_colaborador" inputmode="numeric" autocomplete="off" />
+              </label>
+              <label class="field">
+                <span>Fecha de inicio del entrenamiento</span>
+                <input type="date" data-meta="fecha_inicio" />
+              </label>
+              <label class="field">
+                <span>Fecha de fin del entrenamiento</span>
+                <input type="date" data-meta="fecha_fin" />
+              </label>
+              <label class="field">
+                <span>Puesto en el que se entrenó</span>
+                <input type="text" data-meta="puesto" readonly />
+              </label>
+              <label class="field">
+                <span>Resultado</span>
+                <select data-meta="resultado">
+                  <option value="">—</option>
+                  <option value="APTO">APTO</option>
+                  <option value="NO APTO">NO APTO</option>
+                </select>
+              </label>
             </div>
-            <div class="progress-meta">
-              <strong id="stage-progress-text">0%</strong>
-              <span id="stage-progress-detail" class="muted">0 / 0 tareas finalizadas</span>
+            <label class="field field-full">
+              <span>Observaciones</span>
+              <textarea data-meta="observaciones" rows="3" placeholder="Observaciones generales sobre el entrenamiento…"></textarea>
+            </label>
+          </section>
+
+          <!-- Progreso de esta etapa -->
+          <section class="stage-progress-card" aria-label="Progreso del checklist">
+            <div class="stage-progress-row">
+              <div class="progress">
+                <div id="stage-progress-bar" class="progress-bar" style="width: 0%"></div>
+              </div>
+              <div class="progress-meta">
+                <strong id="stage-progress-text">0%</strong>
+                <span id="stage-progress-detail" class="muted">0 / 0 tareas finalizadas</span>
+              </div>
             </div>
-          </div>
-        </section>
+          </section>
 
-        <!-- Tabla de tareas -->
-        <section class="task-table-card" aria-label="Guía de tareas">
-          <div class="task-table" id="task-table">
-            <!-- Filas renderizadas dinámicamente -->
-          </div>
-        </section>
+          <!-- Tabla de tareas -->
+          <section class="task-table-card" aria-label="Guía de tareas">
+            <div class="task-table" id="task-table"></div>
+          </section>
 
-        <!-- Firmas -->
-        <section class="signatures" aria-label="Firma y aclaración">
-          <div class="sig-block">
-            <div class="sig-line"></div>
-            <strong>Firma y Aclaración</strong>
-            <span class="muted">Colaborador</span>
-          </div>
-          <div class="sig-block">
-            <div class="sig-line"></div>
-            <strong>Firma y Aclaración</strong>
-            <span class="muted">Entrenador</span>
-          </div>
-        </section>
+          <!-- Firmas -->
+          <section class="signatures" aria-label="Firma y aclaración">
+            <div class="sig-block">
+              <div class="sig-line"></div>
+              <strong>Firma y Aclaración</strong>
+              <span class="muted">Colaborador</span>
+            </div>
+            <div class="sig-block">
+              <div class="sig-line"></div>
+              <strong>Firma y Aclaración</strong>
+              <span class="muted">Entrenador</span>
+            </div>
+          </section>
+        </div>
 
         <footer class="main-footer">
           <small class="muted">
-            Dino Talento · Todos los datos se guardan localmente en este navegador. Cada iframe
-            genera una instancia independiente.
+            Dino Talento · Los datos se guardan en Supabase y son accesibles desde cualquier dispositivo.
           </small>
         </footer>
       </main>
@@ -151,19 +157,16 @@
     <!-- Confirm modal -->
     <div id="modal" class="modal" role="dialog" aria-modal="true" aria-hidden="true">
       <div class="modal-card">
-        <h3 id="modal-title">¿Reiniciar instancia?</h3>
-        <p id="modal-body" class="muted">
-          Se borran todos los datos de esta instancia (entrenador, colaborador, fechas, tareas,
-          comentarios). No se puede deshacer.
-        </p>
+        <h3 id="modal-title">Confirmar</h3>
+        <p id="modal-body" class="muted"></p>
         <div class="modal-actions">
           <button id="modal-cancel" class="btn btn-ghost" type="button">Cancelar</button>
-          <button id="modal-confirm" class="btn btn-danger" type="button">Reiniciar</button>
+          <button id="modal-confirm" class="btn btn-danger" type="button">Confirmar</button>
         </div>
       </div>
     </div>
 
-    <script src="data.js"></script>
-    <script src="app.js"></script>
+    <script src="data.js?v=5"></script>
+    <script src="app.js?v=5"></script>
   </body>
 </html>
