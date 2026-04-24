@@ -228,12 +228,109 @@
   function renderSidebar() {
     els.stageNav.innerHTML = "";
     state.stages.forEach((stage) => {
+      const entry = document.createElement("div");
+      entry.className = "stage-nav-entry";
+
+      const row = document.createElement("div");
+      row.className = "stage-nav-row";
+
       const btn = document.createElement("button");
       btn.type = "button";
       btn.className = `stage-nav-item ${state.currentStageId === stage.id ? "active" : ""}`;
       btn.innerHTML = `<div class="top-row"><span>${escapeHtml(stage.name)}</span></div>`;
-      btn.addEventListener("click", () => setCurrentStage(stage.id));
-      els.stageNav.appendChild(btn);
+      btn.addEventListener("click", () => {
+        closeAllDropdowns();
+        setCurrentStage(stage.id);
+      });
+
+      const chevron = document.createElement("button");
+      chevron.type = "button";
+      chevron.className = "stage-nav-chevron";
+      chevron.title = "Ver colaboradores";
+      chevron.textContent = "▾";
+
+      const dropdown = document.createElement("div");
+      dropdown.className = "stage-nav-dropdown";
+
+      chevron.addEventListener("click", (e) => {
+        e.stopPropagation();
+        const isOpen = dropdown.classList.contains("open");
+        closeAllDropdowns();
+        if (!isOpen) openStageDropdown(stage, chevron, dropdown);
+      });
+
+      row.appendChild(btn);
+      row.appendChild(chevron);
+      entry.appendChild(row);
+      entry.appendChild(dropdown);
+      els.stageNav.appendChild(entry);
+    });
+  }
+
+  function closeAllDropdowns() {
+    els.stageNav.querySelectorAll(".stage-nav-dropdown.open").forEach((d) => d.classList.remove("open"));
+    els.stageNav.querySelectorAll(".stage-nav-chevron.open").forEach((c) => c.classList.remove("open"));
+  }
+
+  document.addEventListener("click", closeAllDropdowns);
+
+  async function openStageDropdown(stage, chevronEl, dropdownEl) {
+    chevronEl.classList.add("open");
+    dropdownEl.classList.add("open");
+    dropdownEl.innerHTML = `<div class="stage-nav-dd-loading">Cargando…</div>`;
+
+    let items = [];
+    try {
+      items = await listChecklists(stage.id);
+    } catch (err) {
+      dropdownEl.innerHTML = `<div class="stage-nav-dd-empty">Error al cargar</div>`;
+      return;
+    }
+
+    const newBtn = document.createElement("button");
+    newBtn.type = "button";
+    newBtn.className = "stage-nav-dd-item new-item";
+    newBtn.innerHTML = `<span>➕ Nuevo colaborador</span>`;
+    newBtn.addEventListener("click", async () => {
+      closeAllDropdowns();
+      try {
+        const row = await createChecklist(stage);
+        state.currentStageId = stage.id;
+        renderSidebar();
+        await openChecklist(row.id, stage);
+      } catch (err) {
+        showToast("Error al crear: " + err.message);
+      }
+    });
+
+    dropdownEl.innerHTML = "";
+    dropdownEl.appendChild(newBtn);
+
+    if (!items.length) {
+      const empty = document.createElement("div");
+      empty.className = "stage-nav-dd-empty";
+      empty.textContent = "Sin colaboradores aún";
+      dropdownEl.appendChild(empty);
+      return;
+    }
+
+    items.forEach((c) => {
+      const total = c.tareas_totales || 0;
+      const done  = c.tareas_finalizadas || 0;
+      const pct   = total ? Math.round((done / total) * 100) : 0;
+      const itemBtn = document.createElement("button");
+      itemBtn.type = "button";
+      itemBtn.className = "stage-nav-dd-item";
+      itemBtn.innerHTML = `
+        <span class="stage-nav-dd-collab">${escapeHtml(c.colaborador || "Sin nombre")}</span>
+        <span class="stage-nav-dd-pct">${pct}%</span>`;
+      itemBtn.addEventListener("click", async () => {
+        closeAllDropdowns();
+        state.currentStageId = stage.id;
+        renderSidebar();
+        await openChecklist(c.id, stage);
+      });
+      dropdownEl.appendChild(itemBtn);
     });
   }
 
