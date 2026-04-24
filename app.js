@@ -24,7 +24,16 @@
   // ---------- Constantes ----------
   const ESTADOS = ["", "Pendiente", "En proceso", "Finalizado"];
   const urlParams = new URLSearchParams(window.location.search);
-  const lockedStageId = urlParams.get("stage") || null;
+  const lockedStageId   = urlParams.get("stage") || null;
+  const resumeChecklist = urlParams.get("checklist") || null;
+
+  function pushState(stageId, checklistId) {
+    const p = new URLSearchParams(window.location.search);
+    if (stageId)     p.set("stage",     stageId);
+    if (checklistId) p.set("checklist", checklistId);
+    else             p.delete("checklist");
+    history.replaceState(null, "", "?" + p.toString());
+  }
 
   // ---------- Supabase client ----------
   let db = null;
@@ -335,6 +344,7 @@
       const row = await loadChecklist(id);
       state.currentChecklistId = row.id;
       state.currentChecklist = { meta: row.meta || {}, tasks: row.tasks || {} };
+      pushState(stage.id, row.id);
       setMode("form");
       els.stageTitle.textContent = stage.name;
       renderForm(stage);
@@ -443,6 +453,7 @@
   els.backBtn.addEventListener("click", async () => {
     state.currentChecklistId = null;
     state.currentChecklist = null;
+    pushState(state.currentStageId, null);
     const stage = state.stages.find((s) => s.id === state.currentStageId);
     if (stage) { renderSidebar(); await renderPicker(stage); }
   });
@@ -629,7 +640,13 @@
       }
 
       const initial = lockedStageId || state.stages[0]?.id || null;
-      if (initial) await setCurrentStage(initial);
+      if (initial) {
+        await setCurrentStage(initial);
+        if (resumeChecklist) {
+          const stage = state.stages.find((s) => s.id === initial);
+          if (stage) await openChecklist(resumeChecklist, stage);
+        }
+      }
     } catch (err) {
       console.error(err);
       els.pickerView.hidden = false;
