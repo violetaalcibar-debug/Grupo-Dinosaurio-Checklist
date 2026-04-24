@@ -886,6 +886,118 @@ button {
   color: #fff;
 }
 
+/* ========== Puesto picker (sucursal view) ========== */
+.puesto-picker {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.puesto-card {
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+  box-shadow: var(--shadow-sm);
+  overflow: hidden;
+}
+
+.puesto-card-header {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 14px 18px;
+  cursor: pointer;
+  user-select: none;
+  transition: background 0.15s;
+}
+.puesto-card-header:hover { background: var(--surface-alt); }
+
+.puesto-card-name {
+  flex: 1;
+  font-weight: 600;
+  font-size: 14px;
+  color: var(--text);
+}
+
+.puesto-card-count {
+  font-size: 12px;
+  color: var(--text-muted);
+  background: var(--surface-alt);
+  border: 1px solid var(--border);
+  padding: 2px 10px;
+  border-radius: 999px;
+}
+
+.puesto-card-chevron {
+  font-size: 12px;
+  color: var(--text-soft);
+  transition: transform 0.2s;
+  flex-shrink: 0;
+}
+.puesto-card-body.open ~ .puesto-card-header .puesto-card-chevron,
+.puesto-card.open .puesto-card-chevron { transform: rotate(180deg); }
+
+.puesto-card-body {
+  display: none;
+  flex-direction: column;
+  border-top: 1px solid var(--border);
+  padding: 12px 16px;
+  gap: 8px;
+}
+.puesto-card-body.open { display: flex; }
+
+.puesto-collab-item {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 10px 12px;
+  border-radius: var(--radius-sm);
+  border: 1px solid var(--border);
+  cursor: pointer;
+  transition: background 0.15s, border-color 0.15s;
+}
+.puesto-collab-item:hover {
+  background: var(--surface-alt);
+  border-color: var(--border-strong);
+}
+
+.puesto-collab-main { flex: 1; min-width: 0; }
+.puesto-collab-name {
+  font-weight: 600;
+  font-size: 13.5px;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex-wrap: wrap;
+}
+.puesto-collab-meta {
+  font-size: 12px;
+  color: var(--text-muted);
+  margin-top: 2px;
+}
+
+.puesto-card-empty {
+  font-size: 13px;
+  color: var(--text-soft);
+  padding: 4px 2px;
+}
+
+.puesto-add-btn {
+  width: 100%;
+  justify-content: center;
+  background: var(--primary);
+  color: #fff;
+  border-color: var(--primary);
+  font-size: 13px;
+  padding: 10px;
+  margin-top: 4px;
+}
+.puesto-add-btn:hover {
+  background: var(--primary-600);
+  border-color: var(--primary-600);
+  color: #fff;
+}
+
 /* ========== Config pending ========== */
 .config-pending {
   background: var(--surface);

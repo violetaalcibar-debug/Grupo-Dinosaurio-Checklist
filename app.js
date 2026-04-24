@@ -1,9 +1,8 @@
 /**
  * app.js — Dino Talento (Programa Formaciones · Grupo Dinosaurio)
  *
+ * Jerarquía: Sucursal → Puesto (6) → Colaborador → Checklist
  * Persistencia: Supabase (tabla checklists).
- * Cada fila = un expediente de un colaborador en un puesto.
- * El picker lista todos los expedientes del puesto activo.
  * Autosave con debounce de 500 ms en cada cambio.
  */
 
@@ -24,12 +23,12 @@
   // ---------- Constantes ----------
   const ESTADOS = ["", "Pendiente", "En proceso", "Finalizado"];
   const urlParams = new URLSearchParams(window.location.search);
-  const lockedStageId   = urlParams.get("stage") || null;
-  const resumeChecklist = urlParams.get("checklist") || null;
+  const lockedSucursalId = urlParams.get("sucursal") || null;
+  const resumeChecklist  = urlParams.get("checklist") || null;
 
-  function pushState(stageId, checklistId) {
+  function pushState(sucursalId, checklistId) {
     const p = new URLSearchParams(window.location.search);
-    if (stageId)     p.set("stage",     stageId);
+    if (sucursalId)  p.set("sucursal",  sucursalId);
     if (checklistId) p.set("checklist", checklistId);
     else             p.delete("checklist");
     history.replaceState(null, "", "?" + p.toString());
@@ -43,12 +42,15 @@
 
   // ---------- State ----------
   const state = {
+    sucursales: [],
     stages: [],
-    currentStageId: null,
-    mode: "picker",           // "picker" | "form"
-    currentChecklistId: null, // UUID de la fila activa en DB
-    currentChecklist: null,   // { meta, tasks }
-    pickerItems: [],          // lista cargada del picker actual
+    currentSucursalId: null,
+    currentStageId: null,        // stage del checklist abierto en form
+    expandedStageIds: new Set(), // puestos expandidos en el picker
+    mode: "picker",              // "picker" | "form"
+    currentChecklistId: null,
+    currentChecklist: null,
+    pickerChecklists: [],        // todos los checklists de la sucursal activa
   };
 
   // ---------- Elements ----------
@@ -115,6 +117,11 @@
     return (...args) => { clearTimeout(t); t = setTimeout(() => fn(...args), ms); };
   }
 
+  function fmtDate(iso) {
+    if (!iso) return "";
+    return new Date(iso).toLocaleDateString("es-AR", { day: "2-digit", month: "2-digit", year: "2-digit" });
+  }
+
   // ---------- Save indicator ----------
   function showSaving() {
     els.saveIndicator.textContent = "Guardando…";
@@ -131,23 +138,25 @@
   }
 
   // ---------- Supabase API ----------
-  async function listChecklists(stageId) {
+  async function listChecklistsBySucursal(sucursalId) {
     const { data, error } = await db
       .from("checklists")
-      .select("id, colaborador, tareas_totales, tareas_finalizadas, resultado, updated_at")
-      .eq("stage_id", stageId)
+      .select("id, stage_id, colaborador, tareas_totales, tareas_finalizadas, resultado, updated_at")
+      .eq("sucursal_id", sucursalId)
       .order("updated_at", { ascending: false });
     if (error) throw error;
     return data || [];
   }
 
-  async function createChecklist(stage) {
+  async function createChecklist(sucursal, stage) {
     const taskCount = flattenTasks(stage).length;
     const { data, error } = await db
       .from("checklists")
       .insert({
-        stage_id: stage.id,
-        stage_name: stage.name,
+        sucursal_id:   sucursal.id,
+        sucursal_name: sucursal.name,
+        stage_id:      stage.id,
+        stage_name:    stage.name,
         meta: {
           colaborador: "", entrenador: "",
           legajo_entrenador: "", legajo_colaborador: "",
@@ -156,7 +165,7 @@
           puesto: stage.name,
         },
         tasks: {},
-        tareas_totales: taskCount,
+        tareas_totales:     taskCount,
         tareas_finalizadas: 0,
       })
       .select()
@@ -193,15 +202,14 @@
     const stage = state.stages.find((s) => s.id === state.currentStageId);
     const allTasks = stage ? flattenTasks(stage) : [];
     const total = allTasks.length;
-    const done = allTasks.filter((t) => tasks[t.id]?.estado === "Finalizado").length;
+    const done  = allTasks.filter((t) => tasks[t.id]?.estado === "Finalizado").length;
     try {
       await saveChecklist(state.currentChecklistId, {
-        meta,
-        tasks,
+        meta, tasks,
         colaborador: meta.colaborador || "",
-        entrenador: meta.entrenador || "",
-        resultado: meta.resultado || "",
-        tareas_totales: total,
+        entrenador:  meta.entrenador  || "",
+        resultado:   meta.resultado   || "",
+        tareas_totales:     total,
         tareas_finalizadas: done,
       });
       showSaved();
@@ -216,234 +224,179 @@
   function setMode(mode) {
     state.mode = mode;
     const isForm = mode === "form";
-    els.pickerView.hidden = isForm;
-    els.formView.hidden = !isForm;
-    els.backBtn.hidden = !isForm;
+    els.pickerView.hidden =  isForm;
+    els.formView.hidden   = !isForm;
+    els.backBtn.hidden    = !isForm;
     els.exportXlsx.hidden = !isForm;
-    els.exportPdf.hidden = !isForm;
-    els.exportCsv.hidden = !isForm;
+    els.exportPdf.hidden  = !isForm;
+    els.exportCsv.hidden  = !isForm;
   }
 
-  // ---------- Render: sidebar ----------
+  // ---------- Render: sidebar (sucursales) ----------
   function renderSidebar() {
     els.stageNav.innerHTML = "";
-    state.stages.forEach((stage) => {
-      const entry = document.createElement("div");
-      entry.className = "stage-nav-entry";
-
-      const row = document.createElement("div");
-      row.className = "stage-nav-row";
-
+    state.sucursales.forEach((suc) => {
       const btn = document.createElement("button");
       btn.type = "button";
-      btn.className = `stage-nav-item ${state.currentStageId === stage.id ? "active" : ""}`;
-      btn.innerHTML = `<div class="top-row"><span>${escapeHtml(stage.name)}</span></div>`;
-      btn.addEventListener("click", () => {
-        closeAllDropdowns();
-        setCurrentStage(stage.id);
-      });
-
-      const chevron = document.createElement("button");
-      chevron.type = "button";
-      chevron.className = "stage-nav-chevron";
-      chevron.title = "Ver colaboradores";
-      chevron.textContent = "▾";
-
-      const dropdown = document.createElement("div");
-      dropdown.className = "stage-nav-dropdown";
-
-      chevron.addEventListener("click", (e) => {
-        e.stopPropagation();
-        const isOpen = dropdown.classList.contains("open");
-        closeAllDropdowns();
-        if (!isOpen) openStageDropdown(stage, chevron, dropdown);
-      });
-
-      row.appendChild(btn);
-      row.appendChild(chevron);
-      entry.appendChild(row);
-      entry.appendChild(dropdown);
-      els.stageNav.appendChild(entry);
+      btn.className = `stage-nav-item ${state.currentSucursalId === suc.id ? "active" : ""}`;
+      btn.innerHTML = `<div class="top-row"><span>${escapeHtml(suc.name)}</span></div>`;
+      btn.addEventListener("click", () => setCurrentSucursal(suc.id));
+      els.stageNav.appendChild(btn);
     });
   }
 
-  function closeAllDropdowns() {
-    els.stageNav.querySelectorAll(".stage-nav-dropdown.open").forEach((d) => d.classList.remove("open"));
-    els.stageNav.querySelectorAll(".stage-nav-chevron.open").forEach((c) => c.classList.remove("open"));
-  }
-
-  document.addEventListener("click", closeAllDropdowns);
-
-  async function openStageDropdown(stage, chevronEl, dropdownEl) {
-    chevronEl.classList.add("open");
-    dropdownEl.classList.add("open");
-    dropdownEl.innerHTML = `<div class="stage-nav-dd-loading">Cargando…</div>`;
-
-    let items = [];
-    try {
-      items = await listChecklists(stage.id);
-    } catch (err) {
-      dropdownEl.innerHTML = `<div class="stage-nav-dd-empty">Error al cargar</div>`;
-      return;
-    }
-
-    const newBtn = document.createElement("button");
-    newBtn.type = "button";
-    newBtn.className = "stage-nav-dd-item new-item";
-    newBtn.innerHTML = `<span>➕ Nuevo colaborador</span>`;
-    newBtn.addEventListener("click", async () => {
-      closeAllDropdowns();
-      try {
-        const row = await createChecklist(stage);
-        state.currentStageId = stage.id;
-        renderSidebar();
-        await openChecklist(row.id, stage);
-      } catch (err) {
-        showToast("Error al crear: " + err.message);
-      }
-    });
-
-    dropdownEl.innerHTML = "";
-    dropdownEl.appendChild(newBtn);
-
-    if (!items.length) {
-      const empty = document.createElement("div");
-      empty.className = "stage-nav-dd-empty";
-      empty.textContent = "Sin colaboradores aún";
-      dropdownEl.appendChild(empty);
-      return;
-    }
-
-    items.forEach((c) => {
-      const total = c.tareas_totales || 0;
-      const done  = c.tareas_finalizadas || 0;
-      const pct   = total ? Math.round((done / total) * 100) : 0;
-      const itemBtn = document.createElement("button");
-      itemBtn.type = "button";
-      itemBtn.className = "stage-nav-dd-item";
-      itemBtn.innerHTML = `
-        <span class="stage-nav-dd-collab">${escapeHtml(c.colaborador || "Sin nombre")}</span>
-        <span class="stage-nav-dd-pct">${pct}%</span>`;
-      itemBtn.addEventListener("click", async () => {
-        closeAllDropdowns();
-        state.currentStageId = stage.id;
-        renderSidebar();
-        await openChecklist(c.id, stage);
-      });
-      dropdownEl.appendChild(itemBtn);
-    });
-  }
-
-  // ---------- Render: picker ----------
-  async function renderPicker(stage) {
+  // ---------- Render: puesto picker ----------
+  async function renderPicker(sucursal) {
     setMode("picker");
-    els.stageTitle.textContent = stage.name;
-    els.pickerView.innerHTML = `<div class="picker"><div class="picker-loading">Cargando…</div></div>`;
+    els.stageTitle.textContent = sucursal.name;
+    els.pickerView.innerHTML = `<div class="picker-loading">Cargando…</div>`;
 
     try {
-      state.pickerItems = await listChecklists(stage.id);
+      state.pickerChecklists = await listChecklistsBySucursal(sucursal.id);
     } catch (err) {
-      els.pickerView.innerHTML = `<div class="picker"><div class="picker-empty">Error al cargar: ${escapeHtml(err.message)}</div></div>`;
+      els.pickerView.innerHTML = `<div class="config-pending"><p>Error al cargar: ${escapeHtml(err.message)}</p></div>`;
       return;
     }
 
-    const inProgress = state.pickerItems.filter((c) => !c.resultado);
-    const finished   = state.pickerItems.filter((c) => !!c.resultado);
-
-    function fmtDate(iso) {
-      if (!iso) return "";
-      return new Date(iso).toLocaleDateString("es-AR", { day: "2-digit", month: "2-digit", year: "2-digit" });
-    }
-
-    function renderItems(items) {
-      return items.map((c) => {
-        const total = c.tareas_totales || 0;
-        const done  = c.tareas_finalizadas || 0;
-        const pct   = total ? Math.round((done / total) * 100) : 0;
-        const badge = c.resultado
-          ? `<span class="picker-resultado picker-resultado--${c.resultado === "APTO" ? "apto" : "noapto"}">${escapeHtml(c.resultado)}</span>`
-          : "";
-        return `
-          <div class="picker-item" data-id="${escapeHtml(c.id)}">
-            <div class="picker-item-main">
-              <div class="picker-item-name">${escapeHtml(c.colaborador || "Sin nombre")} ${badge}</div>
-              <div class="picker-item-meta">${done}/${total} tareas · ${fmtDate(c.updated_at)}</div>
-              <div class="picker-mini-progress"><div class="picker-mini-bar" style="width:${pct}%"></div></div>
-            </div>
-            <button class="btn btn-ghost btn-sm picker-delete" data-id="${escapeHtml(c.id)}" title="Eliminar" type="button">🗑</button>
-          </div>`;
-      }).join("");
-    }
-
-    const inProgressHtml = inProgress.length
-      ? `<div class="picker-section"><div class="picker-section-title">En progreso</div>${renderItems(inProgress)}</div>`
-      : "";
-    const finishedHtml = finished.length
-      ? `<div class="picker-section"><div class="picker-section-title">Finalizados</div>${renderItems(finished)}</div>`
-      : "";
-    const emptyHtml = !state.pickerItems.length
-      ? `<div class="picker-empty">No hay checklists para este puesto todavía.<br>Creá el primero con el botón de abajo.</div>`
-      : "";
-
-    els.pickerView.innerHTML = `
-      <div class="picker">
-        <div class="picker-header">${escapeHtml(stage.name)} — Checklists</div>
-        ${inProgressHtml}${finishedHtml}${emptyHtml}
-        <div class="picker-footer">
-          <button class="btn picker-new" id="picker-new-btn" type="button">➕ Nuevo colaborador</button>
-        </div>
-      </div>`;
-
-    // Wire: abrir item
-    els.pickerView.querySelectorAll(".picker-item").forEach((item) => {
-      item.addEventListener("click", async (e) => {
-        if (e.target.closest(".picker-delete")) return;
-        await openChecklist(item.dataset.id, stage);
-      });
+    // Agrupar por stage_id
+    const byStage = {};
+    state.stages.forEach((s) => { byStage[s.id] = []; });
+    state.pickerChecklists.forEach((c) => {
+      if (byStage[c.stage_id] !== undefined) byStage[c.stage_id].push(c);
     });
 
-    // Wire: eliminar item
-    els.pickerView.querySelectorAll(".picker-delete").forEach((btn) => {
-      btn.addEventListener("click", (e) => {
-        e.stopPropagation();
-        const id = btn.dataset.id;
-        const item = state.pickerItems.find((c) => c.id === id);
-        openModal({
-          title: "¿Eliminar checklist?",
-          body: `Se eliminará el expediente de "${item?.colaborador || "Sin nombre"}". Esta acción no se puede deshacer.`,
-          onConfirm: async () => {
-            try {
-              await removeChecklist(id);
-              showToast("Checklist eliminado");
-              await renderPicker(stage);
-            } catch (err) {
-              showToast("Error al eliminar: " + err.message);
-            }
-          },
-        });
-      });
+    const container = document.createElement("div");
+    container.className = "puesto-picker";
+
+    state.stages.forEach((stage) => {
+      const collabs = byStage[stage.id] || [];
+      container.appendChild(buildPuestoCard(sucursal, stage, collabs));
     });
 
-    // Wire: nuevo
-    $("#picker-new-btn").addEventListener("click", async () => {
+    els.pickerView.innerHTML = "";
+    els.pickerView.appendChild(container);
+  }
+
+  function buildPuestoCard(sucursal, stage, collabs) {
+    const isOpen = state.expandedStageIds.has(stage.id);
+
+    const card = document.createElement("div");
+    card.className = `puesto-card${isOpen ? " open" : ""}`;
+    card.dataset.stageId = stage.id;
+
+    // Header
+    const header = document.createElement("div");
+    header.className = "puesto-card-header";
+    header.innerHTML = `
+      <span class="puesto-card-name">${escapeHtml(stage.name)}</span>
+      <span class="puesto-card-count">${collabs.length} colaborador${collabs.length !== 1 ? "es" : ""}</span>
+      <span class="puesto-card-chevron">${isOpen ? "▲" : "▼"}</span>`;
+    header.addEventListener("click", () => togglePuestoCard(card, stage.id));
+
+    // Body
+    const body = document.createElement("div");
+    body.className = `puesto-card-body${isOpen ? " open" : ""}`;
+
+    if (collabs.length === 0) {
+      const empty = document.createElement("div");
+      empty.className = "puesto-card-empty";
+      empty.textContent = "Sin colaboradores aún.";
+      body.appendChild(empty);
+    } else {
+      collabs.forEach((c) => body.appendChild(buildCollabItem(c, sucursal, stage)));
+    }
+
+    const addBtn = document.createElement("button");
+    addBtn.type = "button";
+    addBtn.className = "btn puesto-add-btn";
+    addBtn.textContent = "➕ Agregar colaborador";
+    addBtn.addEventListener("click", async () => {
       try {
-        const row = await createChecklist(stage);
-        await openChecklist(row.id, stage);
+        const row = await createChecklist(sucursal, stage);
+        state.expandedStageIds.add(stage.id);
+        await openChecklist(row.id, stage, sucursal);
       } catch (err) {
         showToast("Error al crear: " + err.message);
       }
     });
+    body.appendChild(addBtn);
+
+    card.appendChild(header);
+    card.appendChild(body);
+    return card;
+  }
+
+  function togglePuestoCard(cardEl, stageId) {
+    const body    = cardEl.querySelector(".puesto-card-body");
+    const chevron = cardEl.querySelector(".puesto-card-chevron");
+    const isOpen  = state.expandedStageIds.has(stageId);
+    if (isOpen) {
+      state.expandedStageIds.delete(stageId);
+      cardEl.classList.remove("open");
+      body.classList.remove("open");
+      chevron.textContent = "▼";
+    } else {
+      state.expandedStageIds.add(stageId);
+      cardEl.classList.add("open");
+      body.classList.add("open");
+      chevron.textContent = "▲";
+    }
+  }
+
+  function buildCollabItem(c, sucursal, stage) {
+    const total = c.tareas_totales    || 0;
+    const done  = c.tareas_finalizadas || 0;
+    const pct   = total ? Math.round((done / total) * 100) : 0;
+    const badge = c.resultado
+      ? `<span class="picker-resultado picker-resultado--${c.resultado === "APTO" ? "apto" : "noapto"}">${escapeHtml(c.resultado)}</span>`
+      : "";
+
+    const item = document.createElement("div");
+    item.className = "puesto-collab-item";
+    item.innerHTML = `
+      <div class="puesto-collab-main">
+        <div class="puesto-collab-name">${escapeHtml(c.colaborador || "Sin nombre")} ${badge}</div>
+        <div class="puesto-collab-meta">${done}/${total} tareas · ${fmtDate(c.updated_at)}</div>
+        <div class="picker-mini-progress"><div class="picker-mini-bar" style="width:${pct}%"></div></div>
+      </div>
+      <button class="btn btn-ghost btn-sm collab-delete" title="Eliminar" type="button">🗑</button>`;
+
+    item.addEventListener("click", async (e) => {
+      if (e.target.closest(".collab-delete")) return;
+      await openChecklist(c.id, stage, sucursal);
+    });
+
+    item.querySelector(".collab-delete").addEventListener("click", (e) => {
+      e.stopPropagation();
+      openModal({
+        title: "¿Eliminar checklist?",
+        body:  `Se eliminará el expediente de "${c.colaborador || "Sin nombre"}". Esta acción no se puede deshacer.`,
+        onConfirm: async () => {
+          try {
+            await removeChecklist(c.id);
+            showToast("Checklist eliminado");
+            const suc = state.sucursales.find((s) => s.id === state.currentSucursalId);
+            if (suc) await renderPicker(suc);
+          } catch (err) {
+            showToast("Error al eliminar: " + err.message);
+          }
+        },
+      });
+    });
+
+    return item;
   }
 
   // ---------- Abrir un checklist ----------
-  async function openChecklist(id, stage) {
+  async function openChecklist(id, stage, sucursal) {
     try {
       const row = await loadChecklist(id);
       state.currentChecklistId = row.id;
-      state.currentChecklist = { meta: row.meta || {}, tasks: row.tasks || {} };
-      pushState(stage.id, row.id);
+      state.currentStageId     = stage.id;
+      state.currentChecklist   = { meta: row.meta || {}, tasks: row.tasks || {} };
+      pushState(sucursal.id, row.id);
       setMode("form");
-      els.stageTitle.textContent = stage.name;
+      els.stageTitle.textContent = `${sucursal.name} · ${stage.name}`;
       renderForm(stage);
       renderStageProgress(stage);
       renderTaskTable(stage);
@@ -468,9 +421,9 @@
     const done  = all.filter((t) => tasks[t.id]?.estado === "Finalizado").length;
     const total = all.length;
     const pct   = total ? Math.round((done / total) * 100) : 0;
-    els.stageBar.style.width = `${pct}%`;
-    els.stageText.textContent = `${pct}%`;
-    els.stageDetail.textContent = `${done} / ${total} tareas finalizadas`;
+    els.stageBar.style.width      = `${pct}%`;
+    els.stageText.textContent     = `${pct}%`;
+    els.stageDetail.textContent   = `${done} / ${total} tareas finalizadas`;
   }
 
   // ---------- Render: task table ----------
@@ -486,25 +439,22 @@
 
     const rows = tasks.map((task, i) => {
       const t = data[task.id] || {};
-      const estado     = t.estado || "";
-      const fecha      = t.fecha || "";
-      const comentario = t.comentario || "";
       return `
-        <div class="task-row" data-task-id="${escapeHtml(task.id)}" data-status="${escapeHtml(estado)}" style="display:contents">
+        <div class="task-row" data-task-id="${escapeHtml(task.id)}" data-status="${escapeHtml(t.estado || "")}" style="display:contents">
           <div class="cell-task">
             <span class="index">${i + 1}.</span>
             <span class="title">${escapeHtml(task.title)}</span>
           </div>
           <div class="cell-date">
-            <input type="date" data-field="fecha" value="${escapeHtml(fecha)}" />
+            <input type="date" data-field="fecha" value="${escapeHtml(t.fecha || "")}" />
           </div>
           <div class="cell-status">
             <select data-field="estado">
-              ${ESTADOS.map((e) => `<option value="${escapeHtml(e)}" ${e === estado ? "selected" : ""}>${e || "—"}</option>`).join("")}
+              ${ESTADOS.map((e) => `<option value="${escapeHtml(e)}" ${e === (t.estado || "") ? "selected" : ""}>${e || "—"}</option>`).join("")}
             </select>
           </div>
           <div class="cell-comment">
-            <textarea data-field="comentario" rows="1" placeholder="Comentarios…">${escapeHtml(comentario)}</textarea>
+            <textarea data-field="comentario" rows="1" placeholder="Comentarios…">${escapeHtml(t.comentario || "")}</textarea>
           </div>
         </div>`;
     }).join("");
@@ -514,7 +464,7 @@
     els.taskTable.querySelectorAll(".task-row").forEach((row) => {
       const taskId = row.dataset.taskId;
       row.querySelectorAll("[data-field]").forEach((input) => {
-        const field = input.dataset.field;
+        const field   = input.dataset.field;
         const handler = () => updateTaskField(stage.id, taskId, field, input.value, row);
         input.addEventListener("change", handler);
         if (input.tagName === "TEXTAREA") input.addEventListener("input", debounce(handler, 300));
@@ -549,23 +499,23 @@
   // ---------- Back button ----------
   els.backBtn.addEventListener("click", async () => {
     state.currentChecklistId = null;
-    state.currentChecklist = null;
-    pushState(state.currentStageId, null);
-    const stage = state.stages.find((s) => s.id === state.currentStageId);
-    if (stage) { renderSidebar(); await renderPicker(stage); }
+    state.currentChecklist   = null;
+    pushState(state.currentSucursalId, null);
+    const suc = state.sucursales.find((s) => s.id === state.currentSucursalId);
+    if (suc) { renderSidebar(); await renderPicker(suc); }
   });
 
-  // ---------- Set current stage ----------
-  async function setCurrentStage(stageId) {
-    state.currentStageId = stageId;
+  // ---------- Set current sucursal ----------
+  async function setCurrentSucursal(sucursalId) {
+    state.currentSucursalId  = sucursalId;
     state.currentChecklistId = null;
-    state.currentChecklist = null;
+    state.currentChecklist   = null;
     renderSidebar();
-    const stage = state.stages.find((s) => s.id === stageId);
-    if (stage) await renderPicker(stage);
+    const suc = state.sucursales.find((s) => s.id === sucursalId);
+    if (suc) await renderPicker(suc);
   }
 
-  // ---------- Exports (checklist actual) ----------
+  // ---------- Exports ----------
   function getExportData() {
     const stage = state.stages.find((s) => s.id === state.currentStageId);
     const meta  = state.currentChecklist?.meta || {};
@@ -591,8 +541,10 @@
   function exportToXLSX() {
     const { stage, meta, tasks } = getExportData();
     if (!stage) { showToast("Abrí un checklist primero"); return; }
+    const suc = state.sucursales.find((s) => s.id === state.currentSucursalId);
     const aoa = [
       ["Dino Talento"], ["PROGRAMA FORMACIONES"], ['"Tu Desarrollo en Grupo Dinosaurio"'], [],
+      ["Sucursal:", suc?.name || ""],
       ["Apellido y Nombre del entrenador:", meta.entrenador || ""],
       ["Nº de Legajo:", meta.legajo_entrenador || ""],
       ["Apellido y Nombre del colaborador entrenado:", meta.colaborador || ""],
@@ -619,6 +571,7 @@
   function exportToPDF() {
     const { stage, meta, tasks } = getExportData();
     if (!stage) { showToast("Abrí un checklist primero"); return; }
+    const suc = state.sucursales.find((s) => s.id === state.currentSucursalId);
     const { jsPDF } = window.jspdf;
     const doc = new jsPDF({ unit: "pt", format: "a4" });
     const marginX = 40;
@@ -633,6 +586,7 @@
     doc.autoTable({
       startY: y, margin: { left: marginX, right: marginX },
       body: [
+        ["Sucursal", suc?.name || "", "", ""],
         ["Entrenador", meta.entrenador || "", "Nº Legajo", meta.legajo_entrenador || ""],
         ["Colaborador entrenado", meta.colaborador || "", "Nº Legajo", meta.legajo_colaborador || ""],
         ["Fecha inicio", meta.fecha_inicio || "", "Fecha fin", meta.fecha_fin || ""],
@@ -670,7 +624,7 @@
       didParseCell: (data) => {
         if (data.section === "body" && data.column.index === 3) {
           const v = data.cell.raw;
-          if (v === "Finalizado")  data.cell.styles.textColor = [22, 120, 60];
+          if (v === "Finalizado")    data.cell.styles.textColor = [22, 120, 60];
           else if (v === "En proceso") data.cell.styles.textColor = [180, 110, 10];
           else if (v === "Pendiente")  data.cell.styles.textColor = [90, 90, 90];
         }
@@ -682,19 +636,21 @@
   }
 
   els.exportXlsx.addEventListener("click", exportToXLSX);
-  els.exportCsv.addEventListener("click", exportToCSV);
-  els.exportPdf.addEventListener("click", exportToPDF);
+  els.exportCsv.addEventListener("click",  exportToCSV);
+  els.exportPdf.addEventListener("click",  exportToPDF);
 
   function filename(ext) {
+    const suc   = state.sucursales.find((s) => s.id === state.currentSucursalId);
     const stage = state.stages.find((s) => s.id === state.currentStageId);
-    const sp = (stage?.name || "").toLowerCase().replace(/\s+/g, "-").replace(/[^a-z0-9-]/g, "").slice(0, 20);
-    const cp = (state.currentChecklist?.meta?.colaborador || "sin-nombre").toLowerCase().replace(/\s+/g, "-").replace(/[^a-z0-9-]/g, "").slice(0, 20) || "sin-nombre";
-    return `dino-talento-${sp}-${cp}-${new Date().toISOString().slice(0, 10)}.${ext}`;
+    const sp  = (suc?.name   || "").toLowerCase().replace(/\s+/g, "-").replace(/[^a-z0-9-]/g, "").slice(0, 20);
+    const st  = (stage?.name || "").toLowerCase().replace(/\s+/g, "-").replace(/[^a-z0-9-]/g, "").slice(0, 15);
+    const cp  = (state.currentChecklist?.meta?.colaborador || "sin-nombre").toLowerCase().replace(/\s+/g, "-").replace(/[^a-z0-9-]/g, "").slice(0, 15) || "sin-nombre";
+    return `dino-${sp}-${st}-${cp}-${new Date().toISOString().slice(0, 10)}.${ext}`;
   }
 
   function triggerDownload(blob, name) {
     const url = URL.createObjectURL(blob);
-    const a = document.createElement("a");
+    const a   = document.createElement("a");
     a.href = url; a.download = name;
     document.body.appendChild(a); a.click(); a.remove();
     setTimeout(() => URL.revokeObjectURL(url), 1000);
@@ -702,7 +658,6 @@
 
   // ---------- Boot ----------
   async function boot() {
-    // Verificar credenciales
     if (credsMissing) {
       els.pickerView.hidden = false;
       els.pickerView.innerHTML = `
@@ -716,32 +671,34 @@
     }
 
     try {
-      const allStages = await window.DineoData.loadStages();
+      state.stages     = await window.DineoData.loadStages();
+      state.sucursales = window.DineoData.SUCURSALES || [];
 
-      if (lockedStageId) {
-        const locked = allStages.find((s) => s.id === lockedStageId);
-        if (!locked) {
-          els.pickerView.hidden = false;
-          els.pickerView.innerHTML = `
-            <div class="config-pending">
-              <h2>Puesto no encontrado</h2>
-              <p>El stage <code>${escapeHtml(lockedStageId)}</code> no existe.</p>
-              <p>IDs válidos: ${allStages.map((s) => `<code>${escapeHtml(s.id)}</code>`).join(" · ")}</p>
-            </div>`;
-          return;
-        }
-        state.stages = [locked];
-        document.body.classList.add("single-stage");
-      } else {
-        state.stages = allStages;
+      if (!state.sucursales.length) {
+        els.pickerView.hidden = false;
+        els.pickerView.innerHTML = `<div class="config-pending"><p>No hay sucursales configuradas en <code>data.js</code>.</p></div>`;
+        return;
       }
 
-      const initial = lockedStageId || state.stages[0]?.id || null;
-      if (initial) {
-        await setCurrentStage(initial);
-        if (resumeChecklist) {
-          const stage = state.stages.find((s) => s.id === initial);
-          if (stage) await openChecklist(resumeChecklist, stage);
+      const initialId = lockedSucursalId || state.sucursales[0]?.id;
+
+      if (lockedSucursalId) {
+        // Modo single-sucursal: ocultar sidebar
+        document.body.classList.add("single-stage");
+      }
+
+      await setCurrentSucursal(initialId);
+
+      // Reanudar checklist si viene en la URL
+      if (resumeChecklist) {
+        const row = await loadChecklist(resumeChecklist).catch(() => null);
+        if (row) {
+          const stage = state.stages.find((s) => s.id === row.stage_id);
+          const suc   = state.sucursales.find((s) => s.id === row.sucursal_id);
+          if (stage && suc) {
+            state.expandedStageIds.add(stage.id);
+            await openChecklist(row.id, stage, suc);
+          }
         }
       }
     } catch (err) {

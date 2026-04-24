@@ -496,4 +496,17 @@ async function loadStages() {
   return INLINE_STAGES;
 }
 
-window.DineoData = { loadStages, INLINE_STAGES };
+const SUCURSALES = [
+  { id: "60-cuadras",         name: "60 Cuadras" },
+  { id: "alta-gracia",        name: "Alta Gracia" },
+  { id: "alto-verde",         name: "Alto Verde" },
+  { id: "circunvalacion",     name: "Circunvalación" },
+  { id: "estacion-caroya",    name: "Estación Caroya" },
+  { id: "las-heras-mendoza",  name: "Las Heras - Mendoza" },
+  { id: "ruta-20",            name: "Ruta 20" },
+  { id: "salsipuedes",        name: "Salsipuedes" },
+  { id: "san-martin-mendoza", name: "San Martín - Mendoza" },
+  { id: "san-vicente",        name: "San Vicente" },
+];
+
+window.DineoData = { loadStages, INLINE_STAGES, SUCURSALES };
