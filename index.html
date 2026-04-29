@@ -36,8 +36,9 @@
         <div class="sidebar-footer">
           <div class="instance-pill" title="Backend de persistencia">
             <span class="dot"></span>
-            <span>Supabase</span>
+            <span id="current-user-label">—</span>
           </div>
+          <button id="logout-btn" class="btn btn-ghost btn-sm" type="button" style="width:100%;margin-top:6px" hidden>Cerrar sesión</button>
         </div>
       </aside>
 
@@ -151,6 +152,28 @@
       </main>
     </div>
 
+    <!-- Login screen -->
+    <div id="login-screen" class="login-screen" hidden>
+      <div class="login-card">
+        <div class="brand">
+          <div class="brand-mark" aria-hidden="true">DT</div>
+          <div class="brand-text">
+            <strong>Dino Talento</strong>
+            <span>Programa Formaciones</span>
+          </div>
+        </div>
+        <h2>Ingresá tu usuario</h2>
+        <p class="muted">Solo necesitás hacerlo una vez en este dispositivo.</p>
+        <form id="login-form" autocomplete="off">
+          <label class="field">
+            <span>Usuario</span>
+            <input id="login-input" type="text" placeholder="Ej: jgarcia" autocomplete="username" />
+          </label>
+          <button class="btn btn-primary" type="submit">Entrar</button>
+        </form>
+      </div>
+    </div>
+
     <!-- Toast -->
     <div id="toast" class="toast" role="status" aria-live="polite"></div>
 
@@ -166,7 +189,7 @@
       </div>
     </div>
 
-    <script src="data.js?v=5"></script>
-    <script src="app.js?v=5"></script>
+    <script src="data.js?v=6"></script>
+    <script src="app.js?v=6"></script>
   </body>
 </html>

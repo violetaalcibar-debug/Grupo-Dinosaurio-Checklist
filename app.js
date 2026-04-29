@@ -22,9 +22,13 @@
 
   // ---------- Constantes ----------
   const ESTADOS = ["", "Pendiente", "En proceso", "Finalizado"];
-  const urlParams = new URLSearchParams(window.location.search);
+  const urlParams        = new URLSearchParams(window.location.search);
   const lockedSucursalId = urlParams.get("sucursal") || null;
   const resumeChecklist  = urlParams.get("checklist") || null;
+  const LS_KEY           = "dino_talento_usuario";
+
+  // Usuario activo (desde localStorage)
+  let JEFE_ID = localStorage.getItem(LS_KEY) || "";
 
   function pushState(sucursalId, checklistId) {
     const p = new URLSearchParams(window.location.search);
@@ -56,6 +60,11 @@
   // ---------- Elements ----------
   const $ = (sel) => document.querySelector(sel);
   const els = {
+    loginScreen:   $("#login-screen"),
+    loginForm:     $("#login-form"),
+    loginInput:    $("#login-input"),
+    userLabel:     $("#current-user-label"),
+    logoutBtn:     $("#logout-btn"),
     stageNav:      $("#stage-nav"),
     stageTitle:    $("#stage-title"),
     stageForm:     $("#stage-form"),
@@ -139,11 +148,13 @@
 
   // ---------- Supabase API ----------
   async function listChecklistsBySucursal(sucursalId) {
-    const { data, error } = await db
+    let q = db
       .from("checklists")
       .select("id, stage_id, colaborador, tareas_totales, tareas_finalizadas, resultado, updated_at")
-      .eq("sucursal_id", sucursalId)
-      .order("updated_at", { ascending: false });
+      .eq("sucursal_id", sucursalId);
+    if (JEFE_ID) q = q.eq("jefe_id", JEFE_ID);
+    q = q.order("updated_at", { ascending: false });
+    const { data, error } = await q;
     if (error) throw error;
     return data || [];
   }
@@ -157,6 +168,7 @@
         sucursal_name: sucursal.name,
         stage_id:      stage.id,
         stage_name:    stage.name,
+        jefe_id:       JEFE_ID || null,
         meta: {
           colaborador: "", entrenador: "",
           legajo_entrenador: "", legajo_colaborador: "",
@@ -656,8 +668,46 @@
     setTimeout(() => URL.revokeObjectURL(url), 1000);
   }
 
+  // ---------- Login / sesión ----------
+  function showLoginScreen() {
+    els.loginScreen.hidden = false;
+    els.loginInput.value = "";
+    setTimeout(() => els.loginInput.focus(), 50);
+  }
+
+  function applySession(usuario) {
+    JEFE_ID = usuario.trim();
+    localStorage.setItem(LS_KEY, JEFE_ID);
+    els.loginScreen.hidden = true;
+    els.userLabel.textContent = JEFE_ID;
+    els.logoutBtn.hidden = false;
+  }
+
+  els.loginForm.addEventListener("submit", (e) => {
+    e.preventDefault();
+    const val = els.loginInput.value.trim();
+    if (!val) { els.loginInput.focus(); return; }
+    applySession(val);
+    boot();
+  });
+
+  els.logoutBtn.addEventListener("click", () => {
+    localStorage.removeItem(LS_KEY);
+    JEFE_ID = "";
+    els.userLabel.textContent = "—";
+    els.logoutBtn.hidden = true;
+    showLoginScreen();
+  });
+
   // ---------- Boot ----------
   async function boot() {
+    // Si no hay usuario guardado, mostrar pantalla de login
+    if (!JEFE_ID) { showLoginScreen(); return; }
+
+    // Restaurar label del usuario en sidebar
+    els.userLabel.textContent = JEFE_ID;
+    els.logoutBtn.hidden = false;
+
     if (credsMissing) {
       els.pickerView.hidden = false;
       els.pickerView.innerHTML = `

@@ -998,6 +998,63 @@ button {
   color: #fff;
 }
 
+/* ========== Login screen ========== */
+.login-screen {
+  position: fixed;
+  inset: 0;
+  background: var(--bg);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  z-index: 1000;
+}
+
+.login-screen[hidden] { display: none; }
+
+.login-card {
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-lg);
+  box-shadow: var(--shadow-md);
+  padding: 40px 36px;
+  width: 100%;
+  max-width: 380px;
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+}
+
+.login-card .brand {
+  padding: 0;
+  border: none;
+  margin-bottom: 4px;
+}
+
+.login-card h2 {
+  margin: 0;
+  font-size: 20px;
+  font-weight: 700;
+  color: var(--text);
+}
+
+.login-card .muted {
+  margin: -8px 0 0;
+  font-size: 13px;
+}
+
+#login-form {
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+}
+
+#login-form .btn {
+  width: 100%;
+  justify-content: center;
+  padding: 12px;
+  font-size: 15px;
+}
+
 /* ========== Config pending ========== */
 .config-pending {
   background: var(--surface);
