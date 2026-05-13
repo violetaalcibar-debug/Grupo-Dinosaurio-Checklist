@@ -5,7 +5,7 @@
  */
 window.DineoConfig = {
   SUPABASE_URL: "https://pigijxbgxvenhggzvtqs.supabase.co",
-  SUPABASE_ANON_KEY: "sb_publishable_T8s7otK4vBu0cYHF4ADHCg_anV1IZLI",
+  SUPABASE_ANON_KEY: "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InBpZ2lqeGJneHZlbmhnZ3p2dHFzIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NzcwMDcwNjIsImV4cCI6MjA5MjU4MzA2Mn0.A_m02leKSe9WZojTmWxQww6WU5-thk9WSD8Kyqnc1wU",
 };
 
 /**
